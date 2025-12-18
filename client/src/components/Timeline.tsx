@@ -508,13 +508,22 @@ export function Timeline({
           }}
         />
 
-        <div className="relative h-full flex items-center px-2 z-10">
-          <span
-            className="text-xs font-medium truncate drop-shadow-sm"
-            style={{ color: singer.baseColor }}
+        {/* Text centered on highlight position but can overflow into appear box */}
+        <div className="absolute inset-0 overflow-hidden z-10">
+          <div 
+            className="absolute inset-y-0 flex items-center justify-center"
+            style={{
+              left: highlightLeft,
+              width: highlightWidth,
+            }}
           >
-            {lyric.text}
-          </span>
+            <span
+              className="text-xs font-medium whitespace-nowrap drop-shadow-sm text-center px-1"
+              style={{ color: singer.baseColor }}
+            >
+              {lyric.text}
+            </span>
+          </div>
         </div>
 
         <div

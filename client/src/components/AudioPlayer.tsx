@@ -15,6 +15,32 @@ interface AudioPlayerProps {
   postBuffer?: number;
 }
 
+const VOLUME_STORAGE_KEY = 'last_volume';
+const DEFAULT_VOLUME = 0.5; // Safe default to protect eardrums
+
+function getStoredVolume(): number {
+  try {
+    const stored = localStorage.getItem(VOLUME_STORAGE_KEY);
+    if (stored !== null) {
+      const parsed = parseFloat(stored);
+      if (!isNaN(parsed) && parsed >= 0 && parsed <= 1) {
+        return parsed;
+      }
+    }
+  } catch {
+    // localStorage might not be available
+  }
+  return DEFAULT_VOLUME;
+}
+
+function storeVolume(volume: number): void {
+  try {
+    localStorage.setItem(VOLUME_STORAGE_KEY, volume.toString());
+  } catch {
+    // localStorage might not be available
+  }
+}
+
 export function AudioPlayer({
   audioPath,
   duration,
@@ -26,7 +52,7 @@ export function AudioPlayer({
   postBuffer = 0,
 }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
-  const [volume, setVolume] = useState(1);
+  const [volume, setVolume] = useState(getStoredVolume);
   const [isMuted, setIsMuted] = useState(false);
   const animationRef = useRef<number>();
   const lastFrameTimeRef = useRef<number>(0);
@@ -36,6 +62,13 @@ export function AudioPlayer({
   const totalDuration = preBuffer + audioDuration + postBuffer;
   const minTime = -preBuffer;
   const maxTime = audioDuration + postBuffer;
+
+  // Set initial volume on audio element when it's available
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.volume = isMuted ? 0 : volume;
+    }
+  }, [volume, isMuted]);
 
   // Convert virtual time to audio time
   const virtualToAudioTime = useCallback((virtualTime: number) => {
@@ -156,6 +189,7 @@ export function AudioPlayer({
   const handleVolumeChange = (value: number[]) => {
     const newVolume = value[0];
     setVolume(newVolume);
+    storeVolume(newVolume); // Persist to localStorage
     if (audioRef.current) {
       audioRef.current.volume = newVolume;
     }
