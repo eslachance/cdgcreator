@@ -9,6 +9,7 @@ import { Timeline } from '@/components/Timeline';
 import { LyricEditor } from '@/components/LyricEditor';
 import { SingerManager } from '@/components/SingerManager';
 import { AddLyricPopover } from '@/components/AddLyricPopover';
+import { KaraokePreview } from '@/components/KaraokePreview';
 import { ZoomIn, ZoomOut, ArrowLeft, GripVertical, Settings } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { formatTime } from '@/lib/utils';
@@ -265,6 +266,13 @@ export function SongEditor({ songId, onBack }: SongEditorProps) {
           </div>
           <div className="h-full flex-1 overflow-y-auto overflow-x-hidden">
             <div className="p-4 space-y-6 w-full">
+              <KaraokePreview
+                currentTime={currentTime}
+                linesCount={song.linesCount}
+                singers={singers}
+                lyrics={lyrics}
+              />
+
               <div className="space-y-3">
                 <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                   <Settings className="h-4 w-4" />
