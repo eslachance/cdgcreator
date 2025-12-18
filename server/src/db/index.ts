@@ -70,6 +70,18 @@ function runMigrations() {
   if (!songColumns.includes('lines_count')) {
     db.exec(`ALTER TABLE songs ADD COLUMN lines_count INTEGER NOT NULL DEFAULT 6`);
   }
+  if (!songColumns.includes('pre_buffer')) {
+    db.exec(`ALTER TABLE songs ADD COLUMN pre_buffer REAL NOT NULL DEFAULT 0`);
+  }
+  if (!songColumns.includes('post_buffer')) {
+    db.exec(`ALTER TABLE songs ADD COLUMN post_buffer REAL NOT NULL DEFAULT 0`);
+  }
+  if (!songColumns.includes('title_card')) {
+    db.exec(`ALTER TABLE songs ADD COLUMN title_card TEXT`);  // JSON string
+  }
+  if (!songColumns.includes('end_card')) {
+    db.exec(`ALTER TABLE songs ADD COLUMN end_card TEXT`);  // JSON string
+  }
 
   const singerInfo = db.prepare("PRAGMA table_info(singers)").all() as { name: string }[];
   const singerColumns = singerInfo.map(col => col.name);

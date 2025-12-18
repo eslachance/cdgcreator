@@ -3,6 +3,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
+import { Switch } from '@/components/ui/switch';
+import { Textarea } from '@/components/ui/textarea';
 import { AudioUpload } from '@/components/AudioUpload';
 import { AudioPlayer } from '@/components/AudioPlayer';
 import { Timeline } from '@/components/Timeline';
@@ -10,10 +12,10 @@ import { LyricEditor } from '@/components/LyricEditor';
 import { SingerManager } from '@/components/SingerManager';
 import { AddLyricPopover } from '@/components/AddLyricPopover';
 import { KaraokePreview } from '@/components/KaraokePreview';
-import { ZoomIn, ZoomOut, ArrowLeft, GripVertical, Settings, Pencil, Check, X } from 'lucide-react';
+import { ZoomIn, ZoomOut, ArrowLeft, GripVertical, Settings, Pencil, Check, X, Clock, Film } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
-import { formatTime } from '@/lib/utils';
-import type { LyricLine } from 'shared';
+import { formatTime, formatTimeWithSign } from '@/lib/utils';
+import type { LyricLine, Card } from 'shared';
 
 interface SongEditorProps {
   songId: string;
@@ -288,6 +290,8 @@ export function SongEditor({ songId, onBack }: SongEditorProps) {
             onTimeUpdate={handleTimeUpdate}
             isPlaying={isPlaying}
             onPlayPause={setIsPlaying}
+            preBuffer={song.preBuffer}
+            postBuffer={song.postBuffer}
           />
 
           <div className="flex items-center gap-3 px-2">
@@ -352,6 +356,10 @@ export function SongEditor({ songId, onBack }: SongEditorProps) {
                 onDeleteLyric={handleDeleteLyric}
                 onDuplicateLyric={handleDuplicateLyric}
                 zoom={zoom}
+                preBuffer={song.preBuffer}
+                postBuffer={song.postBuffer}
+                titleCard={song.titleCard}
+                endCard={song.endCard}
               />
             ) : (
               <div className="flex items-center justify-center h-full text-muted-foreground">
@@ -380,6 +388,8 @@ export function SongEditor({ songId, onBack }: SongEditorProps) {
                 linesCount={song.linesCount}
                 singers={singers}
                 lyrics={lyrics}
+                titleCard={song.titleCard}
+                endCard={song.endCard}
               />
 
               <div className="space-y-3">
@@ -403,6 +413,202 @@ export function SongEditor({ songId, onBack }: SongEditorProps) {
                   <span className="text-[10px] text-muted-foreground">
                     (1–12)
                   </span>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                  <Clock className="h-4 w-4" />
+                  Time Buffers
+                </div>
+                <div className="space-y-2 p-2 rounded-md bg-secondary/50">
+                  <div className="flex items-center gap-3">
+                    <Label className="text-xs text-muted-foreground w-20">Pre-buffer:</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={30}
+                      step={0.5}
+                      value={song.preBuffer || 0}
+                      onChange={(e) => {
+                        const value = Math.max(0, Math.min(30, parseFloat(e.target.value) || 0));
+                        updateSong.mutate({ id: songId, preBuffer: value });
+                      }}
+                      className="h-7 w-20 text-center"
+                    />
+                    <span className="text-[10px] text-muted-foreground">sec</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <Label className="text-xs text-muted-foreground w-20">Post-buffer:</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={30}
+                      step={0.5}
+                      value={song.postBuffer || 0}
+                      onChange={(e) => {
+                        const value = Math.max(0, Math.min(30, parseFloat(e.target.value) || 0));
+                        updateSong.mutate({ id: songId, postBuffer: value });
+                      }}
+                      className="h-7 w-20 text-center"
+                    />
+                    <span className="text-[10px] text-muted-foreground">sec</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                  <Film className="h-4 w-4" />
+                  Title Card (Intro)
+                </div>
+                <div className="space-y-2 p-2 rounded-md bg-secondary/50">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs text-muted-foreground">Enabled</Label>
+                    <Switch
+                      checked={song.titleCard?.enabled || false}
+                      onCheckedChange={(checked) => {
+                        updateSong.mutate({
+                          id: songId,
+                          titleCard: {
+                            ...song.titleCard,
+                            enabled: checked,
+                            text: song.titleCard?.text || `${song.title}\n${song.artist || ''}`,
+                            startTime: song.titleCard?.startTime ?? -(song.preBuffer || 0),
+                            endTime: song.titleCard?.endTime ?? 0,
+                          },
+                        });
+                      }}
+                    />
+                  </div>
+                  {song.titleCard?.enabled && (
+                    <>
+                      <div className="space-y-1">
+                        <Label className="text-xs text-muted-foreground">Text</Label>
+                        <Textarea
+                          value={song.titleCard?.text || ''}
+                          onChange={(e) => {
+                            updateSong.mutate({
+                              id: songId,
+                              titleCard: { ...song.titleCard!, text: e.target.value },
+                            });
+                          }}
+                          placeholder="Title text..."
+                          className="h-16 text-xs"
+                        />
+                      </div>
+                      <div className="flex gap-2">
+                        <div className="flex-1">
+                          <Label className="text-xs text-muted-foreground">Start</Label>
+                          <Input
+                            type="number"
+                            step={0.1}
+                            value={song.titleCard?.startTime ?? 0}
+                            onChange={(e) => {
+                              updateSong.mutate({
+                                id: songId,
+                                titleCard: { ...song.titleCard!, startTime: parseFloat(e.target.value) || 0 },
+                              });
+                            }}
+                            className="h-7 text-xs"
+                          />
+                        </div>
+                        <div className="flex-1">
+                          <Label className="text-xs text-muted-foreground">End</Label>
+                          <Input
+                            type="number"
+                            step={0.1}
+                            value={song.titleCard?.endTime ?? 0}
+                            onChange={(e) => {
+                              updateSong.mutate({
+                                id: songId,
+                                titleCard: { ...song.titleCard!, endTime: parseFloat(e.target.value) || 0 },
+                              });
+                            }}
+                            className="h-7 text-xs"
+                          />
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                  <Film className="h-4 w-4" />
+                  End Card (Outro)
+                </div>
+                <div className="space-y-2 p-2 rounded-md bg-secondary/50">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs text-muted-foreground">Enabled</Label>
+                    <Switch
+                      checked={song.endCard?.enabled || false}
+                      onCheckedChange={(checked) => {
+                        const audioDuration = song.duration || 0;
+                        updateSong.mutate({
+                          id: songId,
+                          endCard: {
+                            ...song.endCard,
+                            enabled: checked,
+                            text: song.endCard?.text || 'Thank you for singing!',
+                            startTime: song.endCard?.startTime ?? audioDuration,
+                            endTime: song.endCard?.endTime ?? (audioDuration + (song.postBuffer || 0)),
+                          },
+                        });
+                      }}
+                    />
+                  </div>
+                  {song.endCard?.enabled && (
+                    <>
+                      <div className="space-y-1">
+                        <Label className="text-xs text-muted-foreground">Text</Label>
+                        <Textarea
+                          value={song.endCard?.text || ''}
+                          onChange={(e) => {
+                            updateSong.mutate({
+                              id: songId,
+                              endCard: { ...song.endCard!, text: e.target.value },
+                            });
+                          }}
+                          placeholder="End card text..."
+                          className="h-16 text-xs"
+                        />
+                      </div>
+                      <div className="flex gap-2">
+                        <div className="flex-1">
+                          <Label className="text-xs text-muted-foreground">Start</Label>
+                          <Input
+                            type="number"
+                            step={0.1}
+                            value={song.endCard?.startTime ?? 0}
+                            onChange={(e) => {
+                              updateSong.mutate({
+                                id: songId,
+                                endCard: { ...song.endCard!, startTime: parseFloat(e.target.value) || 0 },
+                              });
+                            }}
+                            className="h-7 text-xs"
+                          />
+                        </div>
+                        <div className="flex-1">
+                          <Label className="text-xs text-muted-foreground">End</Label>
+                          <Input
+                            type="number"
+                            step={0.1}
+                            value={song.endCard?.endTime ?? 0}
+                            onChange={(e) => {
+                              updateSong.mutate({
+                                id: songId,
+                                endCard: { ...song.endCard!, endTime: parseFloat(e.target.value) || 0 },
+                              });
+                            }}
+                            className="h-7 text-xs"
+                          />
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
 

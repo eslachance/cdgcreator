@@ -2,6 +2,16 @@ import { z } from 'zod';
 
 export const DEFAULT_LINES_COUNT = 6;
 
+// Card schema for title and end cards
+export const CardSchema = z.object({
+  enabled: z.boolean().default(false),
+  text: z.string().default(''),
+  startTime: z.number().default(0),  // Can be negative for pre-buffer
+  endTime: z.number().default(0),
+});
+
+export type Card = z.infer<typeof CardSchema>;
+
 export const SingerSchema = z.object({
   id: z.string(),
   songId: z.string(),
@@ -37,6 +47,10 @@ export const SongSchema = z.object({
   audioPath: z.string().nullable(),
   duration: z.number().nullable(),
   linesCount: z.number().default(DEFAULT_LINES_COUNT),
+  preBuffer: z.number().default(0),  // Seconds of silence before audio
+  postBuffer: z.number().default(0), // Seconds of silence after audio
+  titleCard: CardSchema.optional(),
+  endCard: CardSchema.optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -45,6 +59,10 @@ export const CreateSongInputSchema = z.object({
   title: z.string().min(1, 'Title is required'),
   artist: z.string().optional(),
   linesCount: z.number().min(1).max(12).optional(),
+  preBuffer: z.number().min(0).optional(),
+  postBuffer: z.number().min(0).optional(),
+  titleCard: CardSchema.optional(),
+  endCard: CardSchema.optional(),
 });
 
 export const UpdateSongInputSchema = z.object({
@@ -52,6 +70,10 @@ export const UpdateSongInputSchema = z.object({
   title: z.string().min(1, 'Title is required').optional(),
   artist: z.string().optional(),
   linesCount: z.number().min(1).max(12).optional(),
+  preBuffer: z.number().min(0).optional(),
+  postBuffer: z.number().min(0).optional(),
+  titleCard: CardSchema.optional(),
+  endCard: CardSchema.optional(),
 });
 
 export const CreateSingerInputSchema = z.object({

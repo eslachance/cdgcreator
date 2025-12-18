@@ -1,7 +1,7 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
-import { cn, formatTime } from '@/lib/utils';
+import { cn, formatTimeWithSign } from '@/lib/utils';
 import { LyricEditPopover } from '@/components/LyricEditPopover';
-import type { Singer, LyricLine } from 'shared';
+import type { Singer, LyricLine, Card } from 'shared';
 
 interface TimelineProps {
   duration: number;
@@ -17,6 +17,10 @@ interface TimelineProps {
   onDeleteLyric: (id: string) => void;
   onDuplicateLyric: (lyric: LyricLine) => void;
   zoom: number;
+  preBuffer?: number;
+  postBuffer?: number;
+  titleCard?: Card;
+  endCard?: Card;
 }
 
 const TRACK_HEIGHT = 56;
@@ -39,6 +43,10 @@ export function Timeline({
   onDeleteLyric,
   onDuplicateLyric,
   zoom,
+  preBuffer = 0,
+  postBuffer = 0,
+  titleCard,
+  endCard,
 }: TimelineProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const didDragRef = useRef(false);
@@ -61,7 +69,10 @@ export function Timeline({
   const [popoverPosition, setPopoverPosition] = useState<{ left: number; top: number; width: number } | null>(null);
 
   const pixelsPerSecond = PIXELS_PER_SECOND_BASE * zoom;
-  const totalWidth = Math.max(duration * pixelsPerSecond, 800);
+  const minTime = -preBuffer;
+  const maxTime = duration + postBuffer;
+  const totalDuration = preBuffer + duration + postBuffer;
+  const totalWidth = Math.max(totalDuration * pixelsPerSecond, 800);
 
   const getSingerForLine = useCallback((lineNumber: number): Singer | undefined => {
     return singers.find(
@@ -77,14 +88,16 @@ export function Timeline({
     return ownership;
   }, [linesCount, getSingerForLine]);
 
+  // Convert time to pixel position (time can be negative for pre-buffer)
+  // Pixel 0 is at minTime (start of pre-buffer)
   const timeToPixel = useCallback(
-    (time: number) => time * pixelsPerSecond,
-    [pixelsPerSecond]
+    (time: number) => (time - minTime) * pixelsPerSecond,
+    [pixelsPerSecond, minTime]
   );
 
   const pixelToTime = useCallback(
-    (pixel: number) => Math.max(0, Math.min(pixel / pixelsPerSecond, duration)),
-    [pixelsPerSecond, duration]
+    (pixel: number) => Math.max(minTime, Math.min(pixel / pixelsPerSecond + minTime, maxTime)),
+    [pixelsPerSecond, minTime, maxTime]
   );
 
   const handleTimelineClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -336,25 +349,38 @@ export function Timeline({
     const interval = zoom < 0.5 ? 10 : zoom < 1 ? 5 : zoom < 2 ? 2 : 1;
     const subInterval = interval / 5;
 
-    for (let t = 0; t <= duration; t += subInterval) {
+    // Start from minTime (negative for pre-buffer)
+    for (let t = Math.floor(minTime / subInterval) * subInterval; t <= maxTime; t += subInterval) {
       const x = timeToPixel(t);
-      const isMajor = t % interval < 0.01;
+      // Round to avoid floating point issues
+      const roundedT = Math.round(t * 1000) / 1000;
+      const isMajor = Math.abs(roundedT % interval) < 0.01 || Math.abs(roundedT) < 0.01;
+      const isZero = Math.abs(roundedT) < 0.01;
+      const isInPreBuffer = roundedT < 0;
+      const isInPostBuffer = roundedT > duration;
 
       marks.push(
         <div
-          key={t}
+          key={roundedT}
           className="absolute top-0"
           style={{ left: x }}
         >
           <div
             className={cn(
               'w-px',
-              isMajor ? 'h-4 bg-muted-foreground/50' : 'h-2 bg-muted-foreground/20'
+              isZero 
+                ? 'h-5 bg-green-500' 
+                : isMajor 
+                  ? `h-4 ${isInPreBuffer || isInPostBuffer ? 'bg-muted-foreground/30' : 'bg-muted-foreground/50'}`
+                  : `h-2 ${isInPreBuffer || isInPostBuffer ? 'bg-muted-foreground/10' : 'bg-muted-foreground/20'}`
             )}
           />
           {isMajor && (
-            <span className="absolute top-4 -translate-x-1/2 text-[10px] text-muted-foreground">
-              {formatTime(t)}
+            <span className={cn(
+              "absolute top-4 -translate-x-1/2 text-[10px]",
+              isZero ? 'text-green-500 font-bold' : isInPreBuffer || isInPostBuffer ? 'text-muted-foreground/50' : 'text-muted-foreground'
+            )}>
+              {formatTimeWithSign(roundedT)}
             </span>
           )}
         </div>
@@ -374,7 +400,7 @@ export function Timeline({
     
     const scrollLeft = containerRef.current?.scrollLeft || 0;
     const lyricLeft = timeToPixel(lyric.appearStartTime) - scrollLeft;
-    const lyricWidth = timeToPixel(lyric.appearEndTime - lyric.appearStartTime);
+    const lyricWidth = (lyric.appearEndTime - lyric.appearStartTime) * pixelsPerSecond;
     const lyricTop = RULER_HEIGHT + (lyric.lineNumber + 1) * TRACK_HEIGHT;
     
     setPopoverPosition({
@@ -392,9 +418,10 @@ export function Timeline({
 
   const renderLyricBlock = (lyric: LyricLine, singer: Singer) => {
     const isSelected = selectedLyricId === lyric.id;
-    const appearWidth = timeToPixel(lyric.appearEndTime - lyric.appearStartTime);
-    const highlightLeft = timeToPixel(lyric.highlightStartTime - lyric.appearStartTime);
-    const highlightWidth = timeToPixel(lyric.highlightEndTime - lyric.highlightStartTime);
+    // Use raw pixelsPerSecond for widths and internal offsets (not timeToPixel which includes minTime offset)
+    const appearWidth = (lyric.appearEndTime - lyric.appearStartTime) * pixelsPerSecond;
+    const highlightLeft = (lyric.highlightStartTime - lyric.appearStartTime) * pixelsPerSecond;
+    const highlightWidth = (lyric.highlightEndTime - lyric.highlightStartTime) * pixelsPerSecond;
 
     return (
       <div
@@ -531,6 +558,26 @@ export function Timeline({
                     backgroundColor: owner ? owner.baseColor + '08' : undefined,
                   }}
                 >
+                  {/* Pre-buffer zone */}
+                  {preBuffer > 0 && (
+                    <div
+                      className="absolute top-0 bottom-0 bg-blue-500/5 pointer-events-none"
+                      style={{
+                        left: 0,
+                        width: timeToPixel(0),
+                      }}
+                    />
+                  )}
+                  {/* Post-buffer zone */}
+                  {postBuffer > 0 && (
+                    <div
+                      className="absolute top-0 bottom-0 bg-orange-500/5 pointer-events-none"
+                      style={{
+                        left: timeToPixel(duration),
+                        width: postBuffer * pixelsPerSecond,
+                      }}
+                    />
+                  )}
                   <div
                     className="absolute inset-0 pointer-events-none"
                     style={{
@@ -555,6 +602,36 @@ export function Timeline({
               );
             })}
           </div>
+
+          {/* Title Card visualization */}
+          {titleCard?.enabled && (
+            <div
+              className="absolute rounded-md bg-purple-500/30 border-2 border-purple-500 flex items-center justify-center z-5 pointer-events-none"
+              style={{
+                left: timeToPixel(titleCard.startTime),
+                width: (titleCard.endTime - titleCard.startTime) * pixelsPerSecond,
+                top: RULER_HEIGHT + 4,
+                height: linesCount * TRACK_HEIGHT - 8,
+              }}
+            >
+              <span className="text-purple-400 font-bold text-sm">TITLE CARD</span>
+            </div>
+          )}
+
+          {/* End Card visualization */}
+          {endCard?.enabled && (
+            <div
+              className="absolute rounded-md bg-amber-500/30 border-2 border-amber-500 flex items-center justify-center z-5 pointer-events-none"
+              style={{
+                left: timeToPixel(endCard.startTime),
+                width: (endCard.endTime - endCard.startTime) * pixelsPerSecond,
+                top: RULER_HEIGHT + 4,
+                height: linesCount * TRACK_HEIGHT - 8,
+              }}
+            >
+              <span className="text-amber-400 font-bold text-sm">END CARD</span>
+            </div>
+          )}
 
           <div
             className="absolute top-0 bottom-0 w-0.5 bg-timeline-playhead z-30 pointer-events-none"

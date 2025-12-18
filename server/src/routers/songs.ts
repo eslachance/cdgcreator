@@ -7,7 +7,17 @@ import {
   UpdateSongInputSchema,
   DEFAULT_LINES_COUNT,
   type Song,
+  type Card,
 } from 'shared';
+
+function parseCard(json: string | null): Card | undefined {
+  if (!json) return undefined;
+  try {
+    return JSON.parse(json);
+  } catch {
+    return undefined;
+  }
+}
 
 function rowToSong(row: any): Song {
   return {
@@ -17,6 +27,10 @@ function rowToSong(row: any): Song {
     audioPath: row.audio_path,
     duration: row.duration,
     linesCount: row.lines_count ?? DEFAULT_LINES_COUNT,
+    preBuffer: row.pre_buffer ?? 0,
+    postBuffer: row.post_buffer ?? 0,
+    titleCard: parseCard(row.title_card),
+    endCard: parseCard(row.end_card),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -78,6 +92,22 @@ export const songsRouter = router({
       if (updates.linesCount !== undefined) {
         setClauses.push('lines_count = ?');
         values.push(updates.linesCount);
+      }
+      if (updates.preBuffer !== undefined) {
+        setClauses.push('pre_buffer = ?');
+        values.push(updates.preBuffer);
+      }
+      if (updates.postBuffer !== undefined) {
+        setClauses.push('post_buffer = ?');
+        values.push(updates.postBuffer);
+      }
+      if (updates.titleCard !== undefined) {
+        setClauses.push('title_card = ?');
+        values.push(JSON.stringify(updates.titleCard));
+      }
+      if (updates.endCard !== undefined) {
+        setClauses.push('end_card = ?');
+        values.push(JSON.stringify(updates.endCard));
       }
 
       values.push(id);

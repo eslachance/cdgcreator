@@ -1,11 +1,13 @@
 import { useMemo } from 'react';
-import type { Singer, LyricLine } from 'shared';
+import type { Singer, LyricLine, Card } from 'shared';
 
 interface KaraokePreviewProps {
   currentTime: number;
   linesCount: number;
   singers: Singer[];
   lyrics: LyricLine[];
+  titleCard?: Card;
+  endCard?: Card;
 }
 
 export function KaraokePreview({
@@ -13,8 +15,22 @@ export function KaraokePreview({
   linesCount,
   singers,
   lyrics,
+  titleCard,
+  endCard,
 }: KaraokePreviewProps) {
+  // Check if we should show a card
+  const showTitleCard = titleCard?.enabled && 
+    currentTime >= titleCard.startTime && 
+    currentTime <= titleCard.endTime;
+  
+  const showEndCard = endCard?.enabled && 
+    currentTime >= endCard.startTime && 
+    currentTime <= endCard.endTime;
+
   const visibleLyrics = useMemo(() => {
+    // Don't compute lyrics if showing a card
+    if (showTitleCard || showEndCard) return new Map();
+    
     const lineMap = new Map<number, LyricLine & { singer: Singer; highlightProgress: number }>();
     
     for (const lyric of lyrics) {
@@ -38,7 +54,33 @@ export function KaraokePreview({
     }
 
     return lineMap;
-  }, [currentTime, lyrics, singers]);
+  }, [currentTime, lyrics, singers, showTitleCard, showEndCard]);
+
+  const renderCard = (card: Card, type: 'title' | 'end') => {
+    const lines = card.text.split('\n');
+    const isPurple = type === 'title';
+    
+    return (
+      <div className="absolute inset-0 flex flex-col items-center justify-center px-8">
+        {lines.map((line, i) => (
+          <div
+            key={i}
+            className="text-center font-bold leading-relaxed"
+            style={{
+              fontSize: i === 0 
+                ? `clamp(16px, ${4 / lines.length}vw, 32px)` 
+                : `clamp(12px, ${2.5 / lines.length}vw, 24px)`,
+              color: isPurple ? '#c084fc' : '#fbbf24',
+              textShadow: '2px 2px 4px rgba(0,0,0,0.8)',
+              opacity: i === 0 ? 1 : 0.8,
+            }}
+          >
+            {line}
+          </div>
+        ))}
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-2">
@@ -53,50 +95,56 @@ export function KaraokePreview({
         className="relative bg-black rounded-lg overflow-hidden border border-border"
         style={{ aspectRatio: '16/9' }}
       >
-        <div className="absolute inset-0 flex flex-col justify-center px-4 py-2">
-          {Array.from({ length: linesCount }, (_, lineIndex) => {
-            const lyricData = visibleLyrics.get(lineIndex);
-            
-            return (
-              <div
-                key={lineIndex}
-                className="flex-1 flex items-center justify-center min-h-0"
-                style={{ maxHeight: `${100 / linesCount}%` }}
-              >
-                {lyricData && (
-                  <div 
-                    className="relative text-center font-bold leading-tight w-full px-2"
-                    style={{ 
-                      fontSize: `clamp(10px, ${2.5 / linesCount}vw, ${24 / (linesCount / 6)}px)`,
-                      textShadow: '2px 2px 4px rgba(0,0,0,0.8)',
-                    }}
-                  >
-                    <span 
-                      className="relative inline-block"
+        {showTitleCard && titleCard ? (
+          renderCard(titleCard, 'title')
+        ) : showEndCard && endCard ? (
+          renderCard(endCard, 'end')
+        ) : (
+          <div className="absolute inset-0 flex flex-col justify-center px-4 py-2">
+            {Array.from({ length: linesCount }, (_, lineIndex) => {
+              const lyricData = visibleLyrics.get(lineIndex);
+              
+              return (
+                <div
+                  key={lineIndex}
+                  className="flex-1 flex items-center justify-center min-h-0"
+                  style={{ maxHeight: `${100 / linesCount}%` }}
+                >
+                  {lyricData && (
+                    <div 
+                      className="relative text-center font-bold leading-tight w-full px-2"
+                      style={{ 
+                        fontSize: `clamp(10px, ${2.5 / linesCount}vw, ${24 / (linesCount / 6)}px)`,
+                        textShadow: '2px 2px 4px rgba(0,0,0,0.8)',
+                      }}
                     >
-                      <span style={{ color: lyricData.singer.baseColor }}>
-                        {lyricData.text}
-                      </span>
-                      <span
-                        className="absolute left-0 top-0 overflow-hidden whitespace-nowrap"
-                        style={{ 
-                          width: `${lyricData.highlightProgress * 100}%`,
-                        }}
+                      <span 
+                        className="relative inline-block"
                       >
-                        <span style={{ color: lyricData.singer.highlightColor }}>
+                        <span style={{ color: lyricData.singer.baseColor }}>
                           {lyricData.text}
                         </span>
+                        <span
+                          className="absolute left-0 top-0 overflow-hidden whitespace-nowrap"
+                          style={{ 
+                            width: `${lyricData.highlightProgress * 100}%`,
+                          }}
+                        >
+                          <span style={{ color: lyricData.singer.highlightColor }}>
+                            {lyricData.text}
+                          </span>
+                        </span>
                       </span>
-                    </span>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         <div className="absolute bottom-1 right-2 text-[10px] text-white/30 font-mono">
-          {linesCount} lines
+          {showTitleCard ? 'TITLE' : showEndCard ? 'END' : `${linesCount} lines`}
         </div>
       </div>
     </div>

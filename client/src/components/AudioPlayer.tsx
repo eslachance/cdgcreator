@@ -2,15 +2,17 @@ import { useRef, useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Play, Pause, SkipBack, Volume2, VolumeX } from 'lucide-react';
-import { formatTime } from '@/lib/utils';
+import { formatTime, formatTimeWithSign } from '@/lib/utils';
 
 interface AudioPlayerProps {
   audioPath: string | null;
   duration: number | null;
-  currentTime: number;
+  currentTime: number; // Virtual time (can be negative for pre-buffer)
   onTimeUpdate: (time: number) => void;
   isPlaying: boolean;
   onPlayPause: (playing: boolean) => void;
+  preBuffer?: number;
+  postBuffer?: number;
 }
 
 export function AudioPlayer({
@@ -20,32 +22,82 @@ export function AudioPlayer({
   onTimeUpdate,
   isPlaying,
   onPlayPause,
+  preBuffer = 0,
+  postBuffer = 0,
 }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
   const animationRef = useRef<number>();
+  const lastFrameTimeRef = useRef<number>(0);
+
+  // Calculate total virtual duration
+  const audioDuration = duration || 0;
+  const totalDuration = preBuffer + audioDuration + postBuffer;
+  const minTime = -preBuffer;
+  const maxTime = audioDuration + postBuffer;
+
+  // Convert virtual time to audio time
+  const virtualToAudioTime = useCallback((virtualTime: number) => {
+    return Math.max(0, Math.min(virtualTime, audioDuration));
+  }, [audioDuration]);
+
+  // Check if we're in the audio playback range
+  const isInAudioRange = useCallback((virtualTime: number) => {
+    return virtualTime >= 0 && virtualTime < audioDuration;
+  }, [audioDuration]);
 
   const updateTime = useCallback(() => {
-    if (audioRef.current) {
-      onTimeUpdate(audioRef.current.currentTime);
-    }
+    const now = performance.now();
+    const deltaMs = lastFrameTimeRef.current ? now - lastFrameTimeRef.current : 16;
+    lastFrameTimeRef.current = now;
+
     if (isPlaying) {
+      const deltaSeconds = deltaMs / 1000;
+      const newVirtualTime = currentTime + deltaSeconds;
+
+      // Check if we should be playing audio
+      if (isInAudioRange(newVirtualTime)) {
+        const audio = audioRef.current;
+        if (audio) {
+          // If audio was paused (e.g., coming from pre-buffer), start it
+          if (audio.paused) {
+            audio.currentTime = virtualToAudioTime(newVirtualTime);
+            audio.play().catch(() => {});
+          }
+          // Update virtual time based on audio time
+          onTimeUpdate(audio.currentTime);
+        }
+      } else {
+        // We're in pre-buffer or post-buffer, just advance virtual time
+        const audio = audioRef.current;
+        if (audio && !audio.paused) {
+          audio.pause();
+        }
+        
+        if (newVirtualTime >= maxTime) {
+          // Reached the end
+          onTimeUpdate(maxTime);
+          onPlayPause(false);
+          return;
+        }
+        
+        onTimeUpdate(newVirtualTime);
+      }
+
       animationRef.current = requestAnimationFrame(updateTime);
     }
-  }, [isPlaying, onTimeUpdate]);
+  }, [isPlaying, currentTime, onTimeUpdate, onPlayPause, isInAudioRange, virtualToAudioTime, maxTime]);
 
   useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
     if (isPlaying) {
-      audio.play().catch(() => {
-        onPlayPause(false);
-      });
+      lastFrameTimeRef.current = performance.now();
       animationRef.current = requestAnimationFrame(updateTime);
     } else {
-      audio.pause();
+      const audio = audioRef.current;
+      if (audio && !audio.paused) {
+        audio.pause();
+      }
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
       }
@@ -56,36 +108,49 @@ export function AudioPlayer({
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, [isPlaying, updateTime, onPlayPause]);
+  }, [isPlaying, updateTime]);
 
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
 
     const handleEnded = () => {
-      onPlayPause(false);
-      onTimeUpdate(0);
+      // Audio ended, but we might have post-buffer to continue
+      if (postBuffer > 0) {
+        // Continue playing (virtual time) into post-buffer
+        // The updateTime loop will handle this
+      } else {
+        onPlayPause(false);
+        onTimeUpdate(minTime);
+      }
     };
 
     audio.addEventListener('ended', handleEnded);
     return () => audio.removeEventListener('ended', handleEnded);
-  }, [onPlayPause, onTimeUpdate]);
+  }, [onPlayPause, onTimeUpdate, postBuffer, minTime]);
 
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio || isPlaying) return;
     
-    if (Math.abs(audio.currentTime - currentTime) > 0.1) {
-      audio.currentTime = currentTime;
+    // Sync audio position when seeking while paused
+    if (isInAudioRange(currentTime)) {
+      const audioTime = virtualToAudioTime(currentTime);
+      if (Math.abs(audio.currentTime - audioTime) > 0.1) {
+        audio.currentTime = audioTime;
+      }
     }
-  }, [currentTime, isPlaying]);
+  }, [currentTime, isPlaying, isInAudioRange, virtualToAudioTime]);
 
   const handleSeek = (value: number[]) => {
-    const newTime = value[0];
-    if (audioRef.current) {
-      audioRef.current.currentTime = newTime;
+    const newVirtualTime = value[0];
+    const audio = audioRef.current;
+    
+    if (audio && isInAudioRange(newVirtualTime)) {
+      audio.currentTime = virtualToAudioTime(newVirtualTime);
     }
-    onTimeUpdate(newTime);
+    
+    onTimeUpdate(newVirtualTime);
   };
 
   const handleVolumeChange = (value: number[]) => {
@@ -115,7 +180,7 @@ export function AudioPlayer({
     if (audioRef.current) {
       audioRef.current.currentTime = 0;
     }
-    onTimeUpdate(0);
+    onTimeUpdate(minTime);
   };
 
   if (!audioPath) {
@@ -155,20 +220,21 @@ export function AudioPlayer({
       </div>
 
       <div className="flex-1 flex items-center gap-3">
-        <span className="text-sm font-mono text-muted-foreground w-16 text-right">
-          {formatTime(currentTime)}
+        <span className="text-sm font-mono text-muted-foreground w-20 text-right">
+          {formatTimeWithSign(currentTime)}
         </span>
         
         <Slider
           value={[currentTime]}
-          max={duration || 100}
+          min={minTime}
+          max={maxTime}
           step={0.01}
           onValueChange={handleSeek}
           className="flex-1"
         />
         
-        <span className="text-sm font-mono text-muted-foreground w-16">
-          {formatTime(duration || 0)}
+        <span className="text-sm font-mono text-muted-foreground w-20">
+          {formatTimeWithSign(maxTime)}
         </span>
       </div>
 

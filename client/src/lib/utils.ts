@@ -12,6 +12,16 @@ export function formatTime(seconds: number): string {
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
 }
 
+export function formatTimeWithSign(seconds: number): string {
+  const isNegative = seconds < 0;
+  const absSeconds = Math.abs(seconds);
+  const mins = Math.floor(absSeconds / 60);
+  const secs = Math.floor(absSeconds % 60);
+  const ms = Math.floor((absSeconds % 1) * 100);
+  const sign = isNegative ? '-' : '';
+  return `${sign}${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
+}
+
 export function parseTime(timeStr: string): number {
   const match = timeStr.match(/^(\d+):(\d+)(?:\.(\d+))?$/);
   if (!match) return 0;
