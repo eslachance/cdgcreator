@@ -390,6 +390,7 @@ export function SongEditor({ songId, onBack }: SongEditorProps) {
                 lyrics={lyrics}
                 titleCard={song.titleCard}
                 endCard={song.endCard}
+                duration={song.duration || 0}
               />
 
               <div className="space-y-3">

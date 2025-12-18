@@ -74,6 +74,62 @@ export function Timeline({
   const totalDuration = preBuffer + duration + postBuffer;
   const totalWidth = Math.max(totalDuration * pixelsPerSecond, 800);
 
+  // Detect instrumental gaps (> 5 seconds between lyrics)
+  const instrumentalGaps = useMemo(() => {
+    const MIN_GAP = 5; // seconds
+    const gaps: { start: number; end: number }[] = [];
+    
+    if (lyrics.length === 0) return gaps;
+    
+    // Get all lyric time events to find gaps where NO lyrics are showing
+    const events: { time: number; type: 'start' | 'end' }[] = [];
+    for (const lyric of lyrics) {
+      events.push({ time: lyric.appearStartTime, type: 'start' });
+      events.push({ time: lyric.appearEndTime, type: 'end' });
+    }
+    events.sort((a, b) => a.time - b.time);
+    
+    // Track when all lyrics have ended
+    let activeCount = 0;
+    let gapStart: number | null = null;
+    
+    for (const event of events) {
+      if (event.type === 'start') {
+        if (activeCount === 0 && gapStart !== null) {
+          // Gap ends here
+          const gapDuration = event.time - gapStart;
+          if (gapDuration >= MIN_GAP) {
+            gaps.push({ start: gapStart, end: event.time });
+          }
+          gapStart = null;
+        }
+        activeCount++;
+      } else {
+        activeCount--;
+        if (activeCount === 0) {
+          // All lyrics ended, gap might start
+          gapStart = event.time;
+        }
+      }
+    }
+    
+    // Check for gap at the end (before duration)
+    if (gapStart !== null && duration - gapStart >= MIN_GAP) {
+      gaps.push({ start: gapStart, end: duration });
+    }
+    
+    // Check for gap at the beginning
+    if (lyrics.length > 0) {
+      const sortedByStart = [...lyrics].sort((a, b) => a.appearStartTime - b.appearStartTime);
+      const firstLyricStart = sortedByStart[0].appearStartTime;
+      if (firstLyricStart >= MIN_GAP) {
+        gaps.unshift({ start: 0, end: firstLyricStart });
+      }
+    }
+    
+    return gaps;
+  }, [lyrics, duration]);
+
   const getSingerForLine = useCallback((lineNumber: number): Singer | undefined => {
     return singers.find(
       (s) => lineNumber >= s.startLine && lineNumber < s.startLine + s.lineCount
@@ -632,6 +688,29 @@ export function Timeline({
               <span className="text-amber-400 font-bold text-sm">END CARD</span>
             </div>
           )}
+
+          {/* Instrumental gaps visualization */}
+          {instrumentalGaps.map((gap, index) => (
+            <div
+              key={`instrumental-${index}`}
+              className="absolute rounded-md bg-emerald-500/15 border border-dashed border-emerald-500/40 flex items-center justify-center z-4 pointer-events-none"
+              style={{
+                left: timeToPixel(gap.start),
+                width: (gap.end - gap.start) * pixelsPerSecond,
+                top: RULER_HEIGHT + 4,
+                height: linesCount * TRACK_HEIGHT - 8,
+              }}
+            >
+              <div className="flex items-center gap-2 text-emerald-400/70">
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M9 18V5l12-2v13" />
+                  <circle cx="6" cy="18" r="3" />
+                  <circle cx="18" cy="16" r="3" />
+                </svg>
+                <span className="text-xs font-medium">Instrumental</span>
+              </div>
+            </div>
+          ))}
 
           <div
             className="absolute top-0 bottom-0 w-0.5 bg-timeline-playhead z-30 pointer-events-none"
