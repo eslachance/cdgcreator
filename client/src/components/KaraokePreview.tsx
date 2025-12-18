@@ -31,7 +31,10 @@ export function KaraokePreview({
     // Don't compute lyrics if showing a card
     if (showTitleCard || showEndCard) return new Map();
     
-    const lineMap = new Map<number, LyricLine & { singer: Singer; highlightProgress: number }>();
+    const lineMap = new Map<number, LyricLine & { singer: Singer; highlightProgress: number; opacity: number }>();
+    
+    // Fade duration in seconds (quick fade in/out)
+    const FADE_DURATION = 0.2;
     
     for (const lyric of lyrics) {
       if (currentTime >= lyric.appearStartTime && currentTime <= lyric.appearEndTime) {
@@ -46,9 +49,22 @@ export function KaraokePreview({
           highlightProgress = 1;
         }
 
+        // Calculate opacity for fade in/out
+        let opacity = 1;
+        const timeSinceAppear = currentTime - lyric.appearStartTime;
+        const timeUntilDisappear = lyric.appearEndTime - currentTime;
+        
+        if (timeSinceAppear < FADE_DURATION) {
+          // Fade in
+          opacity = timeSinceAppear / FADE_DURATION;
+        } else if (timeUntilDisappear < FADE_DURATION) {
+          // Fade out
+          opacity = timeUntilDisappear / FADE_DURATION;
+        }
+
         const existing = lineMap.get(lyric.lineNumber);
         if (!existing || lyric.appearStartTime > existing.appearStartTime) {
-          lineMap.set(lyric.lineNumber, { ...lyric, singer, highlightProgress });
+          lineMap.set(lyric.lineNumber, { ...lyric, singer, highlightProgress, opacity });
         }
       }
     }
@@ -60,8 +76,22 @@ export function KaraokePreview({
     const lines = card.text.split('\n');
     const isPurple = type === 'title';
     
+    // Calculate fade for cards too
+    const FADE_DURATION = 0.3;
+    const timeSinceStart = currentTime - card.startTime;
+    const timeUntilEnd = card.endTime - currentTime;
+    let cardOpacity = 1;
+    if (timeSinceStart < FADE_DURATION) {
+      cardOpacity = timeSinceStart / FADE_DURATION;
+    } else if (timeUntilEnd < FADE_DURATION) {
+      cardOpacity = timeUntilEnd / FADE_DURATION;
+    }
+    
     return (
-      <div className="absolute inset-0 flex flex-col items-center justify-center px-8">
+      <div 
+        className="absolute inset-0 flex flex-col items-center justify-center px-8"
+        style={{ opacity: cardOpacity }}
+      >
         {lines.map((line, i) => (
           <div
             key={i}
@@ -112,10 +142,11 @@ export function KaraokePreview({
                 >
                   {lyricData && (
                     <div 
-                      className="relative text-center font-bold leading-tight w-full px-2"
+                      className="relative text-center font-bold leading-tight w-full px-2 transition-opacity duration-200"
                       style={{ 
                         fontSize: `clamp(10px, ${2.5 / linesCount}vw, ${24 / (linesCount / 6)}px)`,
                         textShadow: '2px 2px 4px rgba(0,0,0,0.8)',
+                        opacity: lyricData.opacity,
                       }}
                     >
                       <span 
