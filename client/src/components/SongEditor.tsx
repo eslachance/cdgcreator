@@ -233,6 +233,7 @@ export function SongEditor({ songId, onBack }: SongEditorProps) {
               <Timeline
                 duration={song.duration}
                 currentTime={currentTime}
+                isPlaying={isPlaying}
                 linesCount={song.linesCount}
                 singers={singers}
                 lyrics={lyrics}

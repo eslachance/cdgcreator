@@ -6,6 +6,7 @@ import type { Singer, LyricLine } from 'shared';
 interface TimelineProps {
   duration: number;
   currentTime: number;
+  isPlaying: boolean;
   linesCount: number;
   singers: Singer[];
   lyrics: LyricLine[];
@@ -27,6 +28,7 @@ type DragType = 'appearStart' | 'appearEnd' | 'highlightStart' | 'highlightEnd' 
 export function Timeline({
   duration,
   currentTime,
+  isPlaying,
   linesCount,
   singers,
   lyrics,
@@ -40,6 +42,10 @@ export function Timeline({
 }: TimelineProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const didDragRef = useRef(false);
+  const isUserScrollingRef = useRef(false);
+  const userScrollTimeoutRef = useRef<number | null>(null);
+  const scrollAnimationRef = useRef<number | null>(null);
+  const targetScrollRef = useRef<number | null>(null);
   const [dragging, setDragging] = useState<{
     lyricId: string;
     type: DragType;
@@ -186,6 +192,87 @@ export function Timeline({
       document.removeEventListener('mouseup', handleMouseUp);
     };
   }, [dragging, pixelsPerSecond, duration, linesCount, onUpdateLyric]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handleWheel = () => {
+      if (scrollAnimationRef.current) {
+        cancelAnimationFrame(scrollAnimationRef.current);
+        scrollAnimationRef.current = null;
+        targetScrollRef.current = null;
+      }
+      
+      isUserScrollingRef.current = true;
+      if (userScrollTimeoutRef.current) {
+        clearTimeout(userScrollTimeoutRef.current);
+      }
+      userScrollTimeoutRef.current = window.setTimeout(() => {
+        isUserScrollingRef.current = false;
+      }, 1000);
+    };
+
+    container.addEventListener('wheel', handleWheel, { passive: true });
+    return () => {
+      container.removeEventListener('wheel', handleWheel);
+      if (userScrollTimeoutRef.current) {
+        clearTimeout(userScrollTimeoutRef.current);
+      }
+      if (scrollAnimationRef.current) {
+        cancelAnimationFrame(scrollAnimationRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isPlaying || isUserScrollingRef.current || dragging) return;
+    
+    const container = containerRef.current;
+    if (!container) return;
+
+    const playheadPosition = timeToPixel(currentTime);
+    const containerWidth = container.clientWidth;
+    
+    const newTarget = Math.max(0, playheadPosition - containerWidth / 2);
+    targetScrollRef.current = newTarget;
+    
+    if (!scrollAnimationRef.current) {
+      const animate = () => {
+        const cont = containerRef.current;
+        if (!cont || targetScrollRef.current === null) {
+          scrollAnimationRef.current = null;
+          return;
+        }
+        
+        const current = cont.scrollLeft;
+        const target = targetScrollRef.current;
+        const diff = target - current;
+        
+        if (Math.abs(diff) < 1) {
+          cont.scrollLeft = target;
+          scrollAnimationRef.current = null;
+          targetScrollRef.current = null;
+          return;
+        }
+        
+        cont.scrollLeft = current + diff * 0.08;
+        scrollAnimationRef.current = requestAnimationFrame(animate);
+      };
+      
+      scrollAnimationRef.current = requestAnimationFrame(animate);
+    }
+  }, [currentTime, isPlaying, dragging, timeToPixel]);
+
+  useEffect(() => {
+    if (isPlaying) return;
+    
+    if (scrollAnimationRef.current) {
+      cancelAnimationFrame(scrollAnimationRef.current);
+      scrollAnimationRef.current = null;
+      targetScrollRef.current = null;
+    }
+  }, [isPlaying]);
 
   const renderRuler = () => {
     const marks: React.ReactNode[] = [];
