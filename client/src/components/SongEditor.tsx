@@ -10,7 +10,7 @@ import { LyricEditor } from '@/components/LyricEditor';
 import { SingerManager } from '@/components/SingerManager';
 import { AddLyricPopover } from '@/components/AddLyricPopover';
 import { KaraokePreview } from '@/components/KaraokePreview';
-import { ZoomIn, ZoomOut, ArrowLeft, GripVertical, Settings } from 'lucide-react';
+import { ZoomIn, ZoomOut, ArrowLeft, GripVertical, Settings, Pencil, Check, X } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { formatTime } from '@/lib/utils';
 import type { LyricLine } from 'shared';
@@ -28,6 +28,10 @@ export function SongEditor({ songId, onBack }: SongEditorProps) {
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [selectedLyricId, setSelectedLyricId] = useState<string | null>(null);
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [isEditingArtist, setIsEditingArtist] = useState(false);
+  const [editTitle, setEditTitle] = useState('');
+  const [editArtist, setEditArtist] = useState('');
   const [zoom, setZoom] = useState(1);
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const [isResizing, setIsResizing] = useState(false);
@@ -157,10 +161,114 @@ export function SongEditor({ songId, onBack }: SongEditorProps) {
           <ArrowLeft className="h-5 w-5" />
         </Button>
         
-        <div className="flex-1">
-          <h1 className="text-xl font-semibold">{song.title}</h1>
-          {song.artist && (
-            <p className="text-sm text-muted-foreground">{song.artist}</p>
+        <div className="flex-1 space-y-0.5">
+          {isEditingTitle ? (
+            <div className="flex items-center gap-2">
+              <Input
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                className="h-8 text-lg font-semibold max-w-xs"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    updateSong.mutate({ id: songId, title: editTitle });
+                    setIsEditingTitle(false);
+                  } else if (e.key === 'Escape') {
+                    setIsEditingTitle(false);
+                  }
+                }}
+              />
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={() => {
+                  updateSong.mutate({ id: songId, title: editTitle });
+                  setIsEditingTitle(false);
+                }}
+              >
+                <Check className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={() => setIsEditingTitle(false)}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          ) : (
+            <div className="group flex items-center gap-2">
+              <h1 className="text-xl font-semibold">{song.title}</h1>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                onClick={() => {
+                  setEditTitle(song.title);
+                  setIsEditingTitle(true);
+                }}
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          )}
+          
+          {isEditingArtist ? (
+            <div className="flex items-center gap-2">
+              <Input
+                value={editArtist}
+                onChange={(e) => setEditArtist(e.target.value)}
+                className="h-7 text-sm max-w-xs"
+                placeholder="Artist name"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    updateSong.mutate({ id: songId, artist: editArtist || undefined });
+                    setIsEditingArtist(false);
+                  } else if (e.key === 'Escape') {
+                    setIsEditingArtist(false);
+                  }
+                }}
+              />
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+                onClick={() => {
+                  updateSong.mutate({ id: songId, artist: editArtist || undefined });
+                  setIsEditingArtist(false);
+                }}
+              >
+                <Check className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+                onClick={() => setIsEditingArtist(false)}
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          ) : (
+            <div className="group flex items-center gap-2">
+              <p className="text-sm text-muted-foreground">
+                {song.artist || 'No artist'}
+              </p>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity"
+                onClick={() => {
+                  setEditArtist(song.artist || '');
+                  setIsEditingArtist(true);
+                }}
+              >
+                <Pencil className="h-3 w-3" />
+              </Button>
+            </div>
           )}
         </div>
 
