@@ -127,6 +127,43 @@ export function Timeline({
     onSelectLyric(lyricId);
   };
 
+  const getSnapPoints = useCallback((excludeLyricId: string, targetLineNumber: number) => {
+    const snapPoints: number[] = [];
+    
+    snapPoints.push(currentTime);
+    
+    for (const lyric of lyrics) {
+      if (lyric.id === excludeLyricId) continue;
+      
+      if (lyric.lineNumber === targetLineNumber) {
+        snapPoints.push(lyric.appearStartTime);
+        snapPoints.push(lyric.appearEndTime);
+      } else {
+        snapPoints.push(lyric.appearStartTime);
+        snapPoints.push(lyric.appearEndTime);
+      }
+    }
+    
+    return snapPoints;
+  }, [currentTime, lyrics]);
+
+  const snapToNearest = useCallback((value: number, snapPoints: number[], thresholdPixels: number = 10) => {
+    const thresholdTime = thresholdPixels / pixelsPerSecond;
+    
+    let closest = value;
+    let closestDistance = thresholdTime;
+    
+    for (const point of snapPoints) {
+      const distance = Math.abs(value - point);
+      if (distance < closestDistance) {
+        closest = point;
+        closestDistance = distance;
+      }
+    }
+    
+    return closest;
+  }, [pixelsPerSecond]);
+
   useEffect(() => {
     if (!dragging) return;
 
@@ -144,13 +181,26 @@ export function Timeline({
         const highlightOffset = dragging.originalHighlightStart! - dragging.originalAppearStart!;
         const highlightDuration = dragging.originalHighlightEnd! - dragging.originalHighlightStart!;
         
+        const lineDelta = Math.round(deltaY / TRACK_HEIGHT);
+        const newLineNumber = Math.max(0, Math.min(linesCount - 1, dragging.originalLineNumber + lineDelta));
+        
         let newStart = Math.max(0, dragging.originalAppearStart! + deltaTime);
         if (newStart + blockDuration > duration) {
           newStart = duration - blockDuration;
         }
-
-        const lineDelta = Math.round(deltaY / TRACK_HEIGHT);
-        const newLineNumber = Math.max(0, Math.min(linesCount - 1, dragging.originalLineNumber + lineDelta));
+        
+        const snapPoints = getSnapPoints(dragging.lyricId, newLineNumber);
+        const startSnapPoints = snapPoints;
+        const endSnapPoints = snapPoints;
+        
+        const snappedStart = snapToNearest(newStart, startSnapPoints);
+        const snappedEnd = snapToNearest(newStart + blockDuration, endSnapPoints);
+        
+        if (snappedStart !== newStart) {
+          newStart = snappedStart;
+        } else if (snappedEnd !== newStart + blockDuration) {
+          newStart = snappedEnd - blockDuration;
+        }
 
         onUpdateLyric(dragging.lyricId, {
           appearStartTime: newStart,
@@ -161,18 +211,25 @@ export function Timeline({
         });
       } else {
         let newValue = Math.max(0, Math.min(dragging.originalValue + deltaTime, duration));
+        
+        const currentLyric = lyrics.find(l => l.id === dragging.lyricId);
+        const snapPoints = getSnapPoints(dragging.lyricId, currentLyric?.lineNumber ?? 0);
 
         if (dragging.type === 'appearStart') {
+          newValue = snapToNearest(newValue, snapPoints);
           newValue = Math.min(newValue, dragging.originalHighlightStart! - 0.1);
           onUpdateLyric(dragging.lyricId, { appearStartTime: newValue });
         } else if (dragging.type === 'appearEnd') {
+          newValue = snapToNearest(newValue, snapPoints);
           newValue = Math.max(newValue, dragging.originalHighlightEnd! + 0.1);
           onUpdateLyric(dragging.lyricId, { appearEndTime: newValue });
         } else if (dragging.type === 'highlightStart') {
+          newValue = snapToNearest(newValue, snapPoints);
           newValue = Math.max(newValue, dragging.originalAppearStart! + 0.1);
           newValue = Math.min(newValue, dragging.originalHighlightEnd! - 0.1);
           onUpdateLyric(dragging.lyricId, { highlightStartTime: newValue });
         } else if (dragging.type === 'highlightEnd') {
+          newValue = snapToNearest(newValue, snapPoints);
           newValue = Math.max(newValue, dragging.originalHighlightStart! + 0.1);
           newValue = Math.min(newValue, dragging.originalAppearEnd! - 0.1);
           onUpdateLyric(dragging.lyricId, { highlightEndTime: newValue });
@@ -191,7 +248,7 @@ export function Timeline({
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [dragging, pixelsPerSecond, duration, linesCount, onUpdateLyric]);
+  }, [dragging, pixelsPerSecond, duration, linesCount, lyrics, onUpdateLyric, getSnapPoints, snapToNearest]);
 
   useEffect(() => {
     const container = containerRef.current;
