@@ -319,7 +319,7 @@ export const exportRouter = router({
         };
       }
       
-      const cdgBuffer = generateCDG({
+      const cdgBuffer = await generateCDG({
         duration: song.duration,
         linesCount: song.lines_count || 6,
         lyrics: lyricEvents,

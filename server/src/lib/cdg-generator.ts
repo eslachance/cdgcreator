@@ -6,7 +6,11 @@
  * - https://goughlui.com/2019/03/31/tech-flashback-the-cdgraphics-format-cdg/
  */
 
+import sharp from 'sharp';
+
 const CDG_COMMAND = 0x09;
+const CDG_WIDTH = 300;
+const CDG_HEIGHT = 216;
 const PACKETS_PER_SECOND = 300;
 const TILES_ACROSS = 50;
 const TILES_DOWN = 18;
@@ -170,6 +174,170 @@ interface FrameEvent {
   data?: CDGColor[];
   tiles?: TileUpdate[];
   colorIndex?: number;
+}
+
+interface ImageTileData {
+  tiles: TileUpdate[];
+  colors: CDGColor[];
+}
+
+function cdgColorDistance(c1: CDGColor, c2: CDGColor): number {
+  const dr = (c1.r - c2.r) * 17;
+  const dg = (c1.g - c2.g) * 17;
+  const db = (c1.b - c2.b) * 17;
+  return dr * dr + dg * dg + db * db;
+}
+
+function findClosestColorIndex(color: CDGColor, palette: CDGColor[]): number {
+  let bestIndex = 0;
+  let bestDistance = Infinity;
+  for (let i = 0; i < palette.length; i++) {
+    const dist = cdgColorDistance(color, palette[i]);
+    if (dist < bestDistance) {
+      bestDistance = dist;
+      bestIndex = i;
+    }
+  }
+  return bestIndex;
+}
+
+function rgbToCdgColor(r: number, g: number, b: number): CDGColor {
+  return {
+    r: Math.round(r / 17),
+    g: Math.round(g / 17),
+    b: Math.round(b / 17),
+  };
+}
+
+async function generateTitleCardImage(
+  text: string,
+  textColor: string = '#FFFFFF',
+  bgColor: string = '#000000'
+): Promise<Buffer> {
+  const lines = text.split('\n').filter(l => l.trim());
+  const lineHeight = lines.length > 2 ? 32 : 40;
+  const fontSize = lines.length > 2 ? 28 : 34;
+  const totalTextHeight = lines.length * lineHeight;
+  const startY = Math.floor((CDG_HEIGHT - totalTextHeight) / 2) + fontSize * 0.8;
+  
+  const textElements = lines.map((line, idx) => {
+    const y = startY + idx * lineHeight;
+    return `<text x="50%" y="${y}" text-anchor="middle" 
+      font-family="Arial, Helvetica, sans-serif" 
+      font-size="${fontSize}" 
+      font-weight="bold"
+      fill="${textColor}"
+      stroke="${bgColor}"
+      stroke-width="2"
+      paint-order="stroke">${escapeXml(line)}</text>`;
+  }).join('\n');
+
+  const svg = `<svg width="${CDG_WIDTH}" height="${CDG_HEIGHT}" xmlns="http://www.w3.org/2000/svg">
+    <rect width="100%" height="100%" fill="${bgColor}"/>
+    <rect x="10" y="10" width="${CDG_WIDTH - 20}" height="${CDG_HEIGHT - 20}" 
+      fill="none" stroke="${textColor}" stroke-width="3" rx="8"/>
+    <rect x="16" y="16" width="${CDG_WIDTH - 32}" height="${CDG_HEIGHT - 32}" 
+      fill="none" stroke="${textColor}" stroke-width="1" rx="6"/>
+    ${textElements}
+  </svg>`;
+
+  return sharp(Buffer.from(svg))
+    .resize(CDG_WIDTH, CDG_HEIGHT)
+    .removeAlpha()
+    .toColorspace('srgb')
+    .raw()
+    .toBuffer();
+}
+
+function escapeXml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+async function imageToTiles(imageBuffer: Buffer): Promise<ImageTileData> {
+  const palette: CDGColor[] = [{ r: 0, g: 0, b: 0 }];
+  const colorIndexMap = new Map<string, number>();
+  colorIndexMap.set('0-0-0', 0);
+  
+  const indexedPixels: number[][] = [];
+  for (let y = 0; y < CDG_HEIGHT; y++) {
+    indexedPixels[y] = [];
+    for (let x = 0; x < CDG_WIDTH; x++) {
+      const idx = (y * CDG_WIDTH + x) * 3;
+      const r = imageBuffer[idx] ?? 0;
+      const g = imageBuffer[idx + 1] ?? 0;
+      const b = imageBuffer[idx + 2] ?? 0;
+      const cdgColor = rgbToCdgColor(r, g, b);
+      const colorKey = `${cdgColor.r}-${cdgColor.g}-${cdgColor.b}`;
+      
+      let colorIndex: number;
+      if (colorIndexMap.has(colorKey)) {
+        colorIndex = colorIndexMap.get(colorKey)!;
+      } else if (palette.length < 16) {
+        colorIndex = palette.length;
+        palette.push(cdgColor);
+        colorIndexMap.set(colorKey, colorIndex);
+      } else {
+        colorIndex = findClosestColorIndex(cdgColor, palette);
+      }
+      indexedPixels[y][x] = colorIndex;
+    }
+  }
+  
+  while (palette.length < 16) {
+    palette.push({ r: 0, g: 0, b: 0 });
+  }
+  
+  const tiles: TileUpdate[] = [];
+  
+  for (let tileRow = 0; tileRow < TILES_DOWN; tileRow++) {
+    for (let tileCol = 0; tileCol < TILES_ACROSS; tileCol++) {
+      const colorCounts = new Map<number, number>();
+      
+      for (let py = 0; py < 12; py++) {
+        const y = tileRow * 12 + py;
+        for (let px = 0; px < 6; px++) {
+          const x = tileCol * 6 + px;
+          const colorIdx = indexedPixels[y]?.[x] ?? 0;
+          colorCounts.set(colorIdx, (colorCounts.get(colorIdx) ?? 0) + 1);
+        }
+      }
+      
+      const sortedColors = Array.from(colorCounts.entries())
+        .sort((a, b) => b[1] - a[1]);
+      
+      const color0 = sortedColors[0]?.[0] ?? 0;
+      const color1 = sortedColors[1]?.[0] ?? color0;
+      
+      const tilePixels: number[] = [];
+      for (let py = 0; py < 12; py++) {
+        const y = tileRow * 12 + py;
+        let rowBits = 0;
+        for (let px = 0; px < 6; px++) {
+          const x = tileCol * 6 + px;
+          const colorIdx = indexedPixels[y]?.[x] ?? 0;
+          if (colorIdx !== color0) {
+            rowBits |= (1 << (5 - px));
+          }
+        }
+        tilePixels.push(rowBits);
+      }
+      
+      tiles.push({
+        row: tileRow,
+        col: tileCol,
+        color0,
+        color1,
+        pixels: tilePixels,
+      });
+    }
+  }
+  
+  return { tiles, colors: palette };
 }
 
 class CDGGenerator {
@@ -360,9 +528,12 @@ class CDGGenerator {
     return tiles;
   }
 
-  private writeTilesToPackets(tiles: TileUpdate[]): Buffer[] {
+  private writeTilesToPackets(tiles: TileUpdate[], skipEmpty: boolean = false): Buffer[] {
     const packets: Buffer[] = [];
     for (const tile of tiles) {
+      if (skipEmpty && tile.color0 === 0 && tile.pixels.every(p => p === 0)) {
+        continue;
+      }
       const packet = this.createTilePacket(tile.row, tile.col, tile.color0, tile.color1, tile.pixels);
       if (packet) {
         packets.push(packet);
@@ -420,7 +591,7 @@ class CDGGenerator {
     return gaps;
   }
 
-  generate(options: CDGGeneratorOptions): Buffer {
+  async generate(options: CDGGeneratorOptions, titleCardImage?: ImageTileData, endCardImage?: ImageTileData): Promise<Buffer> {
     const { duration, linesCount, lyrics, titleCard, endCard, backgroundColor, preBuffer = 0, postBuffer = 0 } = options;
     
     const totalDuration = preBuffer + duration + postBuffer;
@@ -459,21 +630,12 @@ class CDGGenerator {
     
     const instrumentalSections = this.detectInstrumentalSections(lyrics, duration);
     
-    if (titleCard?.enabled && titleCard.text) {
-      frameEvents.push({ time: titleCard.startTime + preBuffer, type: 'memoryPreset', colorIndex: 0 });
-      
-      const lines = titleCard.text.split('\n').filter(l => l.trim());
-      const totalHeight = lines.length * this.getCharHeight();
-      const startRow = Math.floor((TILES_DOWN - totalHeight) / 2);
-      const tiles: TileUpdate[] = [];
-      
-      lines.forEach((line, idx) => {
-        const row = startRow + idx * this.getCharHeight();
-        tiles.push(...this.getTextCenteredTiles(line.toUpperCase(), row, 1, 0));
-      });
-      
-      frameEvents.push({ time: titleCard.startTime + preBuffer + 0.1, type: 'tiles', tiles });
-      frameEvents.push({ time: titleCard.endTime + preBuffer, type: 'memoryPreset', colorIndex: 0 });
+    if (titleCard?.enabled && titleCard.text && titleCardImage) {
+      frameEvents.push({ time: titleCard.startTime + preBuffer, type: 'colorTable', data: titleCardImage.colors });
+      frameEvents.push({ time: titleCard.startTime + preBuffer + 0.02, type: 'memoryPreset', colorIndex: 0 });
+      frameEvents.push({ time: titleCard.startTime + preBuffer + 0.1, type: 'tiles', tiles: titleCardImage.tiles });
+      frameEvents.push({ time: titleCard.endTime + preBuffer, type: 'colorTable', data: colors });
+      frameEvents.push({ time: titleCard.endTime + preBuffer + 0.01, type: 'memoryPreset', colorIndex: 0 });
     }
     
     const lineState: Map<number, { text: string; lastHighlightChars: number }> = new Map();
@@ -569,20 +731,10 @@ class CDGGenerator {
       }
     }
     
-    if (endCard?.enabled && endCard.text) {
-      frameEvents.push({ time: endCard.startTime + preBuffer, type: 'memoryPreset', colorIndex: 0 });
-      
-      const lines = endCard.text.split('\n').filter(l => l.trim());
-      const totalHeight = lines.length * this.getCharHeight();
-      const startRow = Math.floor((TILES_DOWN - totalHeight) / 2);
-      const tiles: TileUpdate[] = [];
-      
-      lines.forEach((line, idx) => {
-        const row = startRow + idx * this.getCharHeight();
-        tiles.push(...this.getTextCenteredTiles(line.toUpperCase(), row, 1, 0));
-      });
-      
-      frameEvents.push({ time: endCard.startTime + preBuffer + 0.1, type: 'tiles', tiles });
+    if (endCard?.enabled && endCard.text && endCardImage) {
+      frameEvents.push({ time: endCard.startTime + preBuffer, type: 'colorTable', data: endCardImage.colors });
+      frameEvents.push({ time: endCard.startTime + preBuffer + 0.02, type: 'memoryPreset', colorIndex: 0 });
+      frameEvents.push({ time: endCard.startTime + preBuffer + 0.1, type: 'tiles', tiles: endCardImage.tiles });
     }
     
     frameEvents.sort((a, b) => a.time - b.time);
@@ -605,6 +757,7 @@ class CDGGenerator {
         case 'colorTable':
           if (event.data) {
             eventPackets = this.createColorTablePackets(event.data);
+            this.screenState.clear();
           }
           break;
         case 'memoryPreset':
@@ -614,7 +767,7 @@ class CDGGenerator {
           break;
         case 'tiles':
           if (event.tiles) {
-            eventPackets = this.writeTilesToPackets(event.tiles);
+            eventPackets = this.writeTilesToPackets(event.tiles, true);
           }
           break;
       }
@@ -644,9 +797,23 @@ export function hexToRGB(hex: string): CDGColor {
   return { r, g, b };
 }
 
-export function generateCDG(options: CDGGeneratorOptions): Buffer {
+export async function generateCDG(options: CDGGeneratorOptions): Promise<Buffer> {
   const generator = new CDGGenerator();
-  return generator.generate(options);
+  
+  let titleCardImage: ImageTileData | undefined;
+  let endCardImage: ImageTileData | undefined;
+  
+  if (options.titleCard?.enabled && options.titleCard.text) {
+    const imageBuffer = await generateTitleCardImage(options.titleCard.text);
+    titleCardImage = await imageToTiles(imageBuffer);
+  }
+  
+  if (options.endCard?.enabled && options.endCard.text) {
+    const imageBuffer = await generateTitleCardImage(options.endCard.text);
+    endCardImage = await imageToTiles(imageBuffer);
+  }
+  
+  return generator.generate(options, titleCardImage, endCardImage);
 }
 
 export type { CDGColor, LyricEvent, TitleCard, CDGGeneratorOptions };
