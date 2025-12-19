@@ -116,50 +116,6 @@ const FONT_6x12: Record<string, number[]> = {
   '♪': [0x00, 0x06, 0x07, 0x06, 0x06, 0x3E, 0x3E, 0x1C, 0x00, 0x00, 0x00, 0x00],
 };
 
-function scaleFont2x(fontData: number[]): number[][] {
-  const result: number[][] = [[], [], [], []];
-  
-  for (let row = 0; row < 12; row++) {
-    const srcByte = fontData[row];
-    const destRow = Math.floor(row / 6);
-    const localRow = (row % 6) * 2;
-    
-    let leftByte = 0;
-    let rightByte = 0;
-    
-    for (let bit = 5; bit >= 0; bit--) {
-      const isSet = (srcByte >> bit) & 1;
-      const destBit = (5 - bit) * 2;
-      
-      if (destBit < 6) {
-        if (isSet) {
-          leftByte |= (1 << (5 - destBit));
-          leftByte |= (1 << (5 - destBit - 1));
-        }
-      } else {
-        const rightBit = destBit - 6;
-        if (isSet) {
-          rightByte |= (1 << (5 - rightBit));
-          if (rightBit + 1 < 6) {
-            rightByte |= (1 << (5 - rightBit - 1));
-          }
-        }
-      }
-    }
-    
-    if (result[destRow * 2].length <= localRow) {
-      result[destRow * 2].push(leftByte);
-      result[destRow * 2].push(leftByte);
-    }
-    if (result[destRow * 2 + 1].length <= localRow) {
-      result[destRow * 2 + 1].push(rightByte);
-      result[destRow * 2 + 1].push(rightByte);
-    }
-  }
-  
-  return result;
-}
-
 interface CDGColor {
   r: number;
   g: number;
@@ -218,7 +174,6 @@ interface FrameEvent {
 
 class CDGGenerator {
   private packets: Buffer[] = [];
-  private useDoubleSize = true;
   private screenState: Map<string, { color0: number; color1: number; pixels: string }> = new Map();
 
   private createPacket(instruction: number, data: number[]): Buffer {
@@ -294,41 +249,33 @@ class CDGGenerator {
   }
 
   private getCharTiles(char: string, tileCol: number, tileRow: number, fgColor: number, bgColor: number): TileUpdate[] {
-    const fontData = FONT_6x12[char] || FONT_6x12[char.toUpperCase()] || FONT_6x12[' '];
+    const baseFontData = FONT_6x12[char] || FONT_6x12[char.toUpperCase()] || FONT_6x12[' '];
+    const fontData = baseFontData.map(byte => byte & 0x3E);
     
-    if (this.useDoubleSize) {
-      const scaled = scaleFont2x(fontData);
-      return [
-        { row: tileRow, col: tileCol, color0: bgColor, color1: fgColor, pixels: scaled[0] },
-        { row: tileRow, col: tileCol + 1, color0: bgColor, color1: fgColor, pixels: scaled[1] },
-        { row: tileRow + 1, col: tileCol, color0: bgColor, color1: fgColor, pixels: scaled[2] },
-        { row: tileRow + 1, col: tileCol + 1, color0: bgColor, color1: fgColor, pixels: scaled[3] },
-      ];
-    } else {
-      return [
-        { row: tileRow, col: tileCol, color0: bgColor, color1: fgColor, pixels: fontData },
-      ];
-    }
+    return [
+      { row: tileRow, col: tileCol, color0: bgColor, color1: fgColor, pixels: fontData },
+    ];
   }
 
   private getTextWidth(text: string): number {
-    return this.useDoubleSize ? text.length * 2 : text.length;
+    return text.length;
   }
 
   private getCharHeight(): number {
-    return this.useDoubleSize ? 2 : 1;
+    return 1;
   }
 
   private getTextCenteredTiles(text: string, centerRow: number, fgColor: number, bgColor: number): TileUpdate[] {
     const tiles: TileUpdate[] = [];
-    const textWidth = this.getTextWidth(text);
+    const maxChars = TILES_ACROSS - 2;
+    const displayText = text.length > maxChars ? text.substring(0, maxChars) : text;
+    const textWidth = this.getTextWidth(displayText);
     const startCol = Math.max(1, Math.floor((TILES_ACROSS - textWidth) / 2));
-    const charWidth = this.useDoubleSize ? 2 : 1;
     
-    for (let i = 0; i < text.length; i++) {
-      const col = startCol + i * charWidth;
-      if (col + charWidth - 1 < TILES_ACROSS - 1) {
-        tiles.push(...this.getCharTiles(text[i], col, centerRow, fgColor, bgColor));
+    for (let i = 0; i < displayText.length; i++) {
+      const col = startCol + i;
+      if (col < TILES_ACROSS - 1) {
+        tiles.push(...this.getCharTiles(displayText[i], col, centerRow, fgColor, bgColor));
       }
     }
     return tiles;
@@ -349,15 +296,18 @@ class CDGGenerator {
     const rowsPerLine = Math.floor(usableRows / linesCount);
     const startRow = 1 + lineNumber * rowsPerLine + Math.floor((rowsPerLine - charHeight) / 2);
     
-    const textWidth = this.getTextWidth(text);
-    const startCol = Math.max(1, Math.floor((TILES_ACROSS - textWidth) / 2));
-    const charWidth = this.useDoubleSize ? 2 : 1;
+    const maxChars = TILES_ACROSS - 2;
+    const displayText = text.length > maxChars ? text.substring(0, maxChars) : text;
+    const adjustedHighlightChars = Math.min(highlightChars, displayText.length);
     
-    for (let i = 0; i < text.length; i++) {
-      const color = i < highlightChars ? highlightColor : baseColor;
-      const col = startCol + i * charWidth;
-      if (col + charWidth - 1 < TILES_ACROSS - 1) {
-        tiles.push(...this.getCharTiles(text[i], col, startRow, color, bgColor));
+    const textWidth = this.getTextWidth(displayText);
+    const startCol = Math.max(1, Math.floor((TILES_ACROSS - textWidth) / 2));
+    
+    for (let i = 0; i < displayText.length; i++) {
+      const color = i < adjustedHighlightChars ? highlightColor : baseColor;
+      const col = startCol + i;
+      if (col < TILES_ACROSS - 1) {
+        tiles.push(...this.getCharTiles(displayText[i], col, startRow, color, bgColor));
       }
     }
     return tiles;
