@@ -8,10 +8,6 @@
 
 const CDG_COMMAND = 0x09;
 const PACKETS_PER_SECOND = 300;
-const SCREEN_WIDTH = 300;
-const SCREEN_HEIGHT = 216;
-const TILE_WIDTH = 6;
-const TILE_HEIGHT = 12;
 const TILES_ACROSS = 50;
 const TILES_DOWN = 18;
 
@@ -204,10 +200,26 @@ interface CDGGeneratorOptions {
   postBuffer?: number;
 }
 
+interface TileUpdate {
+  row: number;
+  col: number;
+  color0: number;
+  color1: number;
+  pixels: number[];
+}
+
+interface FrameEvent {
+  time: number;
+  type: 'clear' | 'colorTable' | 'tiles' | 'memoryPreset';
+  data?: CDGColor[];
+  tiles?: TileUpdate[];
+  colorIndex?: number;
+}
+
 class CDGGenerator {
   private packets: Buffer[] = [];
-  private currentPacket = 0;
   private useDoubleSize = true;
+  private screenState: Map<string, { color0: number; color1: number; pixels: string }> = new Map();
 
   private createPacket(instruction: number, data: number[]): Buffer {
     const packet = Buffer.alloc(24);
@@ -219,29 +231,20 @@ class CDGGenerator {
     return packet;
   }
 
-  private addEmptyPackets(count: number) {
-    for (let i = 0; i < count; i++) {
-      this.packets.push(Buffer.alloc(24));
-      this.currentPacket++;
-    }
+  private createEmptyPacket(): Buffer {
+    return Buffer.alloc(24);
   }
 
-  private seekToTime(timeSeconds: number) {
-    const targetPacket = Math.floor(timeSeconds * PACKETS_PER_SECOND);
-    if (targetPacket > this.currentPacket) {
-      this.addEmptyPackets(targetPacket - this.currentPacket);
-    }
-  }
-
-  private setColorTable(colors: CDGColor[]) {
+  private createColorTablePackets(colors: CDGColor[]): Buffer[] {
+    const packets: Buffer[] = [];
+    
     const lowData: number[] = [];
     for (let i = 0; i < 8; i++) {
       const color = colors[i] || { r: 0, g: 0, b: 0 };
       lowData.push((color.r << 2) | ((color.g >> 2) & 0x03));
       lowData.push(((color.g & 0x03) << 4) | color.b);
     }
-    this.packets.push(this.createPacket(CDG_INST_LOAD_CLUT_LOW, lowData));
-    this.currentPacket++;
+    packets.push(this.createPacket(CDG_INST_LOAD_CLUT_LOW, lowData));
 
     const highData: number[] = [];
     for (let i = 8; i < 16; i++) {
@@ -249,26 +252,37 @@ class CDGGenerator {
       highData.push((color.r << 2) | ((color.g >> 2) & 0x03));
       highData.push(((color.g & 0x03) << 4) | color.b);
     }
-    this.packets.push(this.createPacket(CDG_INST_LOAD_CLUT_HIGH, highData));
-    this.currentPacket++;
+    packets.push(this.createPacket(CDG_INST_LOAD_CLUT_HIGH, highData));
+    
+    return packets;
   }
 
-  private memoryPreset(colorIndex: number, repeat: number = 0) {
+  private createMemoryPresetPackets(colorIndex: number): Buffer[] {
+    const packets: Buffer[] = [];
     for (let i = 0; i < 16; i++) {
       const data = [colorIndex & 0x0F, i, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-      this.packets.push(this.createPacket(CDG_INST_MEMORY_PRESET, data));
-      this.currentPacket++;
+      packets.push(this.createPacket(CDG_INST_MEMORY_PRESET, data));
     }
+    this.screenState.clear();
+    return packets;
   }
 
-  private borderPreset(colorIndex: number) {
-    const data = [colorIndex & 0x0F, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    this.packets.push(this.createPacket(CDG_INST_BORDER_PRESET, data));
-    this.currentPacket++;
-  }
-
-  private drawTile(row: number, col: number, color0: number, color1: number, pixels: number[]) {
-    if (row < 0 || row >= TILES_DOWN || col < 0 || col >= TILES_ACROSS) return;
+  private createTilePacket(row: number, col: number, color0: number, color1: number, pixels: number[]): Buffer | null {
+    if (row < 0 || row >= TILES_DOWN || col < 0 || col >= TILES_ACROSS) return null;
+    
+    const key = `${row},${col}`;
+    const pixelsStr = pixels.join(',');
+    const currentState = this.screenState.get(key);
+    
+    if (currentState && 
+        currentState.color0 === color0 && 
+        currentState.color1 === color1 && 
+        currentState.pixels === pixelsStr) {
+      return null;
+    }
+    
+    this.screenState.set(key, { color0, color1, pixels: pixelsStr });
+    
     const data = [
       color0 & 0x0F,
       color1 & 0x0F,
@@ -276,23 +290,25 @@ class CDGGenerator {
       col & 0x3F,
       ...pixels.slice(0, 12).map(p => p & 0x3F)
     ];
-    this.packets.push(this.createPacket(CDG_INST_TILE_BLOCK, data));
-    this.currentPacket++;
+    return this.createPacket(CDG_INST_TILE_BLOCK, data);
   }
 
-  private drawCharacterSingle(char: string, tileCol: number, tileRow: number, fgColor: number, bgColor: number) {
+  private getCharTiles(char: string, tileCol: number, tileRow: number, fgColor: number, bgColor: number): TileUpdate[] {
     const fontData = FONT_6x12[char] || FONT_6x12[char.toUpperCase()] || FONT_6x12[' '];
-    this.drawTile(tileRow, tileCol, bgColor, fgColor, fontData);
-  }
-
-  private drawCharacterDouble(char: string, tileCol: number, tileRow: number, fgColor: number, bgColor: number) {
-    const fontData = FONT_6x12[char] || FONT_6x12[char.toUpperCase()] || FONT_6x12[' '];
-    const scaled = scaleFont2x(fontData);
     
-    this.drawTile(tileRow, tileCol, bgColor, fgColor, scaled[0]);
-    this.drawTile(tileRow, tileCol + 1, bgColor, fgColor, scaled[1]);
-    this.drawTile(tileRow + 1, tileCol, bgColor, fgColor, scaled[2]);
-    this.drawTile(tileRow + 1, tileCol + 1, bgColor, fgColor, scaled[3]);
+    if (this.useDoubleSize) {
+      const scaled = scaleFont2x(fontData);
+      return [
+        { row: tileRow, col: tileCol, color0: bgColor, color1: fgColor, pixels: scaled[0] },
+        { row: tileRow, col: tileCol + 1, color0: bgColor, color1: fgColor, pixels: scaled[1] },
+        { row: tileRow + 1, col: tileCol, color0: bgColor, color1: fgColor, pixels: scaled[2] },
+        { row: tileRow + 1, col: tileCol + 1, color0: bgColor, color1: fgColor, pixels: scaled[3] },
+      ];
+    } else {
+      return [
+        { row: tileRow, col: tileCol, color0: bgColor, color1: fgColor, pixels: fontData },
+      ];
+    }
   }
 
   private getTextWidth(text: string): number {
@@ -303,43 +319,31 @@ class CDGGenerator {
     return this.useDoubleSize ? 2 : 1;
   }
 
-  private drawTextCentered(text: string, centerRow: number, fgColor: number, bgColor: number) {
+  private getTextCenteredTiles(text: string, centerRow: number, fgColor: number, bgColor: number): TileUpdate[] {
+    const tiles: TileUpdate[] = [];
     const textWidth = this.getTextWidth(text);
     const startCol = Math.max(1, Math.floor((TILES_ACROSS - textWidth) / 2));
+    const charWidth = this.useDoubleSize ? 2 : 1;
     
     for (let i = 0; i < text.length; i++) {
-      if (this.useDoubleSize) {
-        const col = startCol + i * 2;
-        if (col + 1 < TILES_ACROSS - 1) {
-          this.drawCharacterDouble(text[i], col, centerRow, fgColor, bgColor);
-        }
-      } else {
-        const col = startCol + i;
-        if (col < TILES_ACROSS - 1) {
-          this.drawCharacterSingle(text[i], col, centerRow, fgColor, bgColor);
-        }
+      const col = startCol + i * charWidth;
+      if (col + charWidth - 1 < TILES_ACROSS - 1) {
+        tiles.push(...this.getCharTiles(text[i], col, centerRow, fgColor, bgColor));
       }
     }
+    return tiles;
   }
 
-  private drawTextOnLine(text: string, lineNumber: number, linesCount: number, fgColor: number, bgColor: number) {
-    const charHeight = this.getCharHeight();
-    const usableRows = TILES_DOWN - 2;
-    const rowsPerLine = Math.floor(usableRows / linesCount);
-    const startRow = 1 + lineNumber * rowsPerLine + Math.floor((rowsPerLine - charHeight) / 2);
-    
-    this.drawTextCentered(text, startRow, fgColor, bgColor);
-  }
-
-  private drawTextWithHighlight(
+  private getTextWithHighlightTiles(
     text: string, 
     lineNumber: number, 
     linesCount: number, 
     baseColor: number, 
     highlightColor: number, 
     bgColor: number,
-    highlightProgress: number
-  ) {
+    highlightChars: number
+  ): TileUpdate[] {
+    const tiles: TileUpdate[] = [];
     const charHeight = this.getCharHeight();
     const usableRows = TILES_DOWN - 2;
     const rowsPerLine = Math.floor(usableRows / linesCount);
@@ -347,38 +351,36 @@ class CDGGenerator {
     
     const textWidth = this.getTextWidth(text);
     const startCol = Math.max(1, Math.floor((TILES_ACROSS - textWidth) / 2));
-    const highlightChars = Math.floor(text.length * highlightProgress);
+    const charWidth = this.useDoubleSize ? 2 : 1;
     
     for (let i = 0; i < text.length; i++) {
       const color = i < highlightChars ? highlightColor : baseColor;
-      if (this.useDoubleSize) {
-        const col = startCol + i * 2;
-        if (col + 1 < TILES_ACROSS - 1) {
-          this.drawCharacterDouble(text[i], col, startRow, color, bgColor);
-        }
-      } else {
-        const col = startCol + i;
-        if (col < TILES_ACROSS - 1) {
-          this.drawCharacterSingle(text[i], col, startRow, color, bgColor);
-        }
+      const col = startCol + i * charWidth;
+      if (col + charWidth - 1 < TILES_ACROSS - 1) {
+        tiles.push(...this.getCharTiles(text[i], col, startRow, color, bgColor));
       }
     }
+    return tiles;
   }
 
-  private clearLine(lineNumber: number, linesCount: number, bgColor: number) {
+  private getClearLineTiles(lineNumber: number, linesCount: number, bgColor: number): TileUpdate[] {
+    const tiles: TileUpdate[] = [];
     const charHeight = this.getCharHeight();
     const usableRows = TILES_DOWN - 2;
     const rowsPerLine = Math.floor(usableRows / linesCount);
     const startRow = 1 + lineNumber * rowsPerLine + Math.floor((rowsPerLine - charHeight) / 2);
+    const emptyPixels = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     
     for (let row = startRow; row < startRow + charHeight && row < TILES_DOWN - 1; row++) {
       for (let col = 1; col < TILES_ACROSS - 1; col++) {
-        this.drawTile(row, col, bgColor, bgColor, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        tiles.push({ row, col, color0: bgColor, color1: bgColor, pixels: emptyPixels });
       }
     }
+    return tiles;
   }
 
-  private drawProgressBar(progress: number, row: number, fgColor: number, bgColor: number) {
+  private getProgressBarTiles(progress: number, row: number, fgColor: number, bgColor: number): TileUpdate[] {
+    const tiles: TileUpdate[] = [];
     const barWidth = 36;
     const startCol = Math.floor((TILES_ACROSS - barWidth) / 2);
     const filledTiles = Math.floor(barWidth * progress);
@@ -386,22 +388,37 @@ class CDGGenerator {
     for (let col = 0; col < barWidth; col++) {
       const tileCol = startCol + col;
       if (col < filledTiles) {
-        this.drawTile(row, tileCol, bgColor, fgColor, [
-          0x00, 0x00, 0x3F, 0x3F, 0x3F, 0x3F, 0x3F, 0x3F, 0x3F, 0x3F, 0x00, 0x00
-        ]);
+        tiles.push({
+          row, col: tileCol, color0: bgColor, color1: fgColor,
+          pixels: [0x00, 0x00, 0x3F, 0x3F, 0x3F, 0x3F, 0x3F, 0x3F, 0x3F, 0x3F, 0x00, 0x00]
+        });
       } else if (col === filledTiles) {
         const partialProgress = (barWidth * progress) - filledTiles;
         const pixelsFilled = Math.floor(6 * partialProgress);
         const mask = pixelsFilled > 0 ? (0x3F << (6 - pixelsFilled)) & 0x3F : 0;
-        this.drawTile(row, tileCol, bgColor, fgColor, [
-          0x00, 0x00, mask, mask, mask, mask, mask, mask, mask, mask, 0x00, 0x00
-        ]);
+        tiles.push({
+          row, col: tileCol, color0: bgColor, color1: fgColor,
+          pixels: [0x00, 0x00, mask, mask, mask, mask, mask, mask, mask, mask, 0x00, 0x00]
+        });
       } else {
-        this.drawTile(row, tileCol, bgColor, fgColor, [
-          0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00
-        ]);
+        tiles.push({
+          row, col: tileCol, color0: bgColor, color1: fgColor,
+          pixels: [0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00]
+        });
       }
     }
+    return tiles;
+  }
+
+  private writeTilesToPackets(tiles: TileUpdate[]): Buffer[] {
+    const packets: Buffer[] = [];
+    for (const tile of tiles) {
+      const packet = this.createTilePacket(tile.row, tile.col, tile.color0, tile.color1, tile.pixels);
+      if (packet) {
+        packets.push(packet);
+      }
+    }
+    return packets;
   }
 
   private detectInstrumentalSections(lyrics: LyricEvent[], duration: number): InstrumentalSection[] {
@@ -457,6 +474,7 @@ class CDGGenerator {
     const { duration, linesCount, lyrics, titleCard, endCard, backgroundColor, preBuffer = 0, postBuffer = 0 } = options;
     
     const totalDuration = preBuffer + duration + postBuffer;
+    const totalPackets = Math.ceil(totalDuration * PACKETS_PER_SECOND);
     const bgColor: CDGColor = backgroundColor || { r: 0, g: 0, b: 0 };
     
     const uniqueColors = new Map<string, CDGColor>();
@@ -484,38 +502,35 @@ class CDGGenerator {
       colors.push({ r: 0, g: 0, b: 0 });
     }
     
-    this.setColorTable(colors);
-    this.memoryPreset(0);
-    this.borderPreset(0);
-    this.addEmptyPackets(10);
+    const frameEvents: FrameEvent[] = [];
+    
+    frameEvents.push({ time: 0, type: 'colorTable', data: colors });
+    frameEvents.push({ time: 0.01, type: 'memoryPreset', colorIndex: 0 });
     
     const instrumentalSections = this.detectInstrumentalSections(lyrics, duration);
     
     if (titleCard?.enabled && titleCard.text) {
-      const cardStartTime = titleCard.startTime + preBuffer;
-      const cardEndTime = titleCard.endTime + preBuffer;
-      
-      this.seekToTime(Math.max(0.1, cardStartTime));
-      this.memoryPreset(0);
+      frameEvents.push({ time: titleCard.startTime + preBuffer, type: 'memoryPreset', colorIndex: 0 });
       
       const lines = titleCard.text.split('\n').filter(l => l.trim());
       const totalHeight = lines.length * this.getCharHeight();
       const startRow = Math.floor((TILES_DOWN - totalHeight) / 2);
+      const tiles: TileUpdate[] = [];
       
       lines.forEach((line, idx) => {
         const row = startRow + idx * this.getCharHeight();
-        this.drawTextCentered(line.toUpperCase(), row, 1, 0);
+        tiles.push(...this.getTextCenteredTiles(line.toUpperCase(), row, 1, 0));
       });
       
-      this.seekToTime(cardEndTime);
-      this.memoryPreset(0);
+      frameEvents.push({ time: titleCard.startTime + preBuffer + 0.1, type: 'tiles', tiles });
+      frameEvents.push({ time: titleCard.endTime + preBuffer, type: 'memoryPreset', colorIndex: 0 });
     }
     
     const lineState: Map<number, { text: string; lastHighlightChars: number }> = new Map();
     let currentInstrumental: InstrumentalSection | null = null;
     let lastProgressUpdate = -1;
     
-    const timeSlice = 0.1;
+    const timeSlice = 1.0 / 30;
     for (let time = 0; time < duration; time += timeSlice) {
       const adjustedTime = time + preBuffer;
       
@@ -533,18 +548,18 @@ class CDGGenerator {
           
           if (currentInstrumental !== section) {
             currentInstrumental = section;
-            this.seekToTime(adjustedTime);
-            this.memoryPreset(0);
+            frameEvents.push({ time: adjustedTime, type: 'memoryPreset', colorIndex: 0 });
             
             const iconRow = Math.floor(TILES_DOWN / 2) - 2;
-            this.drawTextCentered('♪', iconRow, 1, 0);
+            const iconTiles = this.getTextCenteredTiles('♪', iconRow, 1, 0);
+            frameEvents.push({ time: adjustedTime + 0.1, type: 'tiles', tiles: iconTiles });
           }
           
           const progressRow = Math.floor(TILES_DOWN / 2) + 2;
           const progressPercent = Math.floor(instrumentalProgress * 100);
           if (progressPercent !== lastProgressUpdate) {
-            this.seekToTime(adjustedTime);
-            this.drawProgressBar(instrumentalProgress, progressRow, 1, 0);
+            const progressTiles = this.getProgressBarTiles(instrumentalProgress, progressRow, 1, 0);
+            frameEvents.push({ time: adjustedTime, type: 'tiles', tiles: progressTiles });
             lastProgressUpdate = progressPercent;
           }
           break;
@@ -553,10 +568,10 @@ class CDGGenerator {
       
       if (!inInstrumental) {
         if (currentInstrumental !== null) {
-          this.seekToTime(adjustedTime);
-          this.memoryPreset(0);
+          frameEvents.push({ time: adjustedTime, type: 'memoryPreset', colorIndex: 0 });
           currentInstrumental = null;
           lastProgressUpdate = -1;
+          lineState.clear();
         }
         
         const activeLyrics = lyrics.filter(
@@ -580,24 +595,24 @@ class CDGGenerator {
           const state = lineState.get(lyric.lineNumber);
           
           if (!state || state.text !== lyric.text || state.lastHighlightChars !== highlightChars) {
-            this.seekToTime(adjustedTime);
-            this.drawTextWithHighlight(
+            const tiles = this.getTextWithHighlightTiles(
               lyric.text.toUpperCase(),
               lyric.lineNumber,
               linesCount,
               baseColorIdx,
               highlightColorIdx,
               0,
-              highlightProgress
+              highlightChars
             );
+            frameEvents.push({ time: adjustedTime, type: 'tiles', tiles });
             lineState.set(lyric.lineNumber, { text: lyric.text, lastHighlightChars: highlightChars });
           }
         }
         
         for (const [lineNum] of lineState.entries()) {
           if (!activeLyrics.some(l => l.lineNumber === lineNum)) {
-            this.seekToTime(adjustedTime);
-            this.clearLine(lineNum, linesCount, 0);
+            const tiles = this.getClearLineTiles(lineNum, linesCount, 0);
+            frameEvents.push({ time: adjustedTime, type: 'tiles', tiles });
             lineState.delete(lineNum);
           }
         }
@@ -605,23 +620,67 @@ class CDGGenerator {
     }
     
     if (endCard?.enabled && endCard.text) {
-      const cardStartTime = endCard.startTime + preBuffer;
-      const cardEndTime = Math.min(endCard.endTime + preBuffer, totalDuration - 0.1);
-      
-      this.seekToTime(cardStartTime);
-      this.memoryPreset(0);
+      frameEvents.push({ time: endCard.startTime + preBuffer, type: 'memoryPreset', colorIndex: 0 });
       
       const lines = endCard.text.split('\n').filter(l => l.trim());
       const totalHeight = lines.length * this.getCharHeight();
       const startRow = Math.floor((TILES_DOWN - totalHeight) / 2);
+      const tiles: TileUpdate[] = [];
       
       lines.forEach((line, idx) => {
         const row = startRow + idx * this.getCharHeight();
-        this.drawTextCentered(line.toUpperCase(), row, 1, 0);
+        tiles.push(...this.getTextCenteredTiles(line.toUpperCase(), row, 1, 0));
       });
+      
+      frameEvents.push({ time: endCard.startTime + preBuffer + 0.1, type: 'tiles', tiles });
     }
     
-    this.seekToTime(totalDuration);
+    frameEvents.sort((a, b) => a.time - b.time);
+    
+    this.packets = [];
+    this.screenState.clear();
+    let currentPacket = 0;
+    
+    for (const event of frameEvents) {
+      const targetPacket = Math.floor(event.time * PACKETS_PER_SECOND);
+      
+      while (currentPacket < targetPacket && currentPacket < totalPackets) {
+        this.packets.push(this.createEmptyPacket());
+        currentPacket++;
+      }
+      
+      let eventPackets: Buffer[] = [];
+      
+      switch (event.type) {
+        case 'colorTable':
+          if (event.data) {
+            eventPackets = this.createColorTablePackets(event.data);
+          }
+          break;
+        case 'memoryPreset':
+          if (event.colorIndex !== undefined) {
+            eventPackets = this.createMemoryPresetPackets(event.colorIndex);
+          }
+          break;
+        case 'tiles':
+          if (event.tiles) {
+            eventPackets = this.writeTilesToPackets(event.tiles);
+          }
+          break;
+      }
+      
+      for (const packet of eventPackets) {
+        if (currentPacket < totalPackets) {
+          this.packets.push(packet);
+          currentPacket++;
+        }
+      }
+    }
+    
+    while (currentPacket < totalPackets) {
+      this.packets.push(this.createEmptyPacket());
+      currentPacket++;
+    }
     
     return Buffer.concat(this.packets);
   }
