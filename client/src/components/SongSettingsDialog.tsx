@@ -26,8 +26,11 @@ import {
   Trash2,
   Pencil,
   ListPlus,
-  FileText,
   AlertTriangle,
+  Download,
+  Video,
+  Disc,
+  RefreshCw,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { toast } from '@/hooks/use-toast';
@@ -77,6 +80,7 @@ export function SongSettingsDialog({
   const [selectedSingerId, setSelectedSingerId] = useState<string>('');
   const [replaceExisting, setReplaceExisting] = useState(false);
   const lyricsInputRef = useRef<HTMLInputElement>(null);
+  const [isExportingCDG, setIsExportingCDG] = useState(false);
 
   const utils = trpc.useUtils();
 
@@ -134,6 +138,108 @@ export function SongSettingsDialog({
       utils.lyrics.listBySong.invalidate({ songId });
     },
   });
+
+  const generateCDG = trpc.export.generateCDG.useMutation();
+  const startVideoExport = trpc.export.startVideoExport.useMutation();
+  const downloadVideo = trpc.export.downloadVideo.useMutation();
+  const cancelVideoExport = trpc.export.cancelVideoExport.useMutation();
+  
+  const { data: videoExportStatus, refetch: refetchVideoStatus } = trpc.export.getVideoExportStatus.useQuery(
+    { songId },
+    { 
+      refetchInterval: (query) => {
+        const status = query.state.data?.status;
+        if (status === 'generating' || status === 'encoding' || status === 'pending') {
+          return 500;
+        }
+        return false;
+      },
+    }
+  );
+
+  const isVideoExporting = videoExportStatus?.status === 'generating' || 
+                           videoExportStatus?.status === 'encoding' || 
+                           videoExportStatus?.status === 'pending';
+  const isVideoComplete = videoExportStatus?.status === 'complete' && videoExportStatus?.hasData;
+  const isVideoError = videoExportStatus?.status === 'error';
+
+  const handleExportCDG = async () => {
+    setIsExportingCDG(true);
+    try {
+      const result = await generateCDG.mutateAsync({ songId });
+      const blob = new Blob(
+        [Uint8Array.from(atob(result.data), c => c.charCodeAt(0))],
+        { type: 'application/zip' }
+      );
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = result.filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast({
+        title: 'Export complete',
+        description: `Downloaded ${result.filename}`,
+      });
+    } catch {
+      toast({
+        variant: 'destructive',
+        title: 'Export failed',
+        description: 'Failed to generate CDG file.',
+      });
+    } finally {
+      setIsExportingCDG(false);
+    }
+  };
+
+  const handleStartVideoExport = async () => {
+    try {
+      await startVideoExport.mutateAsync({ songId });
+      refetchVideoStatus();
+    } catch {
+      toast({
+        variant: 'destructive',
+        title: 'Export failed',
+        description: 'Failed to start video export.',
+      });
+    }
+  };
+
+  const handleDownloadVideo = async () => {
+    try {
+      const result = await downloadVideo.mutateAsync({ songId });
+      const blob = new Blob(
+        [Uint8Array.from(atob(result.data), c => c.charCodeAt(0))],
+        { type: 'video/mp4' }
+      );
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = result.filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast({
+        title: 'Download complete',
+        description: `Downloaded ${result.filename}`,
+      });
+    } catch {
+      toast({
+        variant: 'destructive',
+        title: 'Download failed',
+        description: 'Failed to download video file.',
+      });
+    }
+  };
+
+  const handleRegenerateVideo = async () => {
+    await cancelVideoExport.mutateAsync({ songId });
+    refetchVideoStatus();
+    handleStartVideoExport();
+  };
 
   const handleAudioUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -338,10 +444,11 @@ export function SongSettingsDialog({
         </DialogHeader>
 
         <Tabs defaultValue="general" className="flex-1 flex flex-col overflow-hidden">
-          <TabsList className="grid w-full grid-cols-3">
+          <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="general">General</TabsTrigger>
             <TabsTrigger value="singers">Singers</TabsTrigger>
             <TabsTrigger value="cards">Cards</TabsTrigger>
+            <TabsTrigger value="export">Export</TabsTrigger>
           </TabsList>
 
           <div className="flex-1 overflow-y-auto mt-4">
@@ -893,6 +1000,170 @@ export function SongSettingsDialog({
                     </>
                   )}
                 </div>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="export" className="space-y-6 m-0">
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                  <Download className="h-4 w-4" />
+                  Export Karaoke
+                </div>
+                
+                {!song.audioPath ? (
+                  <div className="p-4 rounded-md bg-secondary/50 text-center">
+                    <FileAudio className="h-8 w-8 mx-auto mb-2 text-muted-foreground/50" />
+                    <p className="text-sm text-muted-foreground">Upload audio to enable export</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="p-4 rounded-md bg-secondary/50 space-y-3">
+                      <div className="flex items-center gap-3">
+                        <div className="h-10 w-10 rounded-md bg-purple-500/10 flex items-center justify-center">
+                          <Video className="h-5 w-5 text-purple-500" />
+                        </div>
+                        <div className="flex-1">
+                          <p className="text-sm font-medium">Video (MP4)</p>
+                          <p className="text-xs text-muted-foreground">720p video file with audio</p>
+                        </div>
+                        {!isVideoExporting && !isVideoComplete && (
+                          <Button
+                            onClick={handleStartVideoExport}
+                            disabled={isExportingCDG}
+                            className="gap-2"
+                          >
+                            <Download className="h-4 w-4" />
+                            Export
+                          </Button>
+                        )}
+                        {isVideoComplete && (
+                          <div className="flex gap-2">
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              onClick={handleRegenerateVideo}
+                              title="Regenerate video"
+                            >
+                              <RefreshCw className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              onClick={handleDownloadVideo}
+                              className="gap-2"
+                            >
+                              <Download className="h-4 w-4" />
+                              Download
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                      
+                      {isVideoExporting && (
+                        <div className="space-y-3 pt-2">
+                          <div className="space-y-1.5">
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-muted-foreground">
+                                {videoExportStatus?.status === 'pending' && 'Preparing...'}
+                                {videoExportStatus?.status === 'generating' && 'Step 1: Generating frames'}
+                                {videoExportStatus?.status === 'encoding' && 'Step 2: Encoding video'}
+                              </span>
+                              <span className="font-mono text-muted-foreground">
+                                {videoExportStatus?.progress ?? 0}%
+                              </span>
+                            </div>
+                            <div className="h-2 w-full bg-secondary rounded-full overflow-hidden">
+                              <div 
+                                className={cn(
+                                  "h-full rounded-full transition-all duration-300",
+                                  videoExportStatus?.status === 'generating' && "bg-purple-500",
+                                  videoExportStatus?.status === 'encoding' && "bg-green-500",
+                                  videoExportStatus?.status === 'pending' && "bg-purple-500/50"
+                                )}
+                                style={{ width: `${videoExportStatus?.progress ?? 0}%` }}
+                              />
+                            </div>
+                          </div>
+                          
+                          <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                            <div className="flex items-center gap-1.5">
+                              <div className={cn(
+                                "w-2 h-2 rounded-full",
+                                videoExportStatus?.status === 'generating' ? "bg-purple-500 animate-pulse" : 
+                                videoExportStatus?.status === 'encoding' || videoExportStatus?.status === 'complete' ? "bg-purple-500" : "bg-muted"
+                              )} />
+                              <span>Generate</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <div className={cn(
+                                "w-2 h-2 rounded-full",
+                                videoExportStatus?.status === 'encoding' ? "bg-green-500 animate-pulse" : 
+                                videoExportStatus?.status === 'complete' ? "bg-green-500" : "bg-muted"
+                              )} />
+                              <span>Encode</span>
+                            </div>
+                          </div>
+                          
+                          <p className="text-xs text-muted-foreground text-center">
+                            You can close this dialog — export will continue in the background.
+                          </p>
+                        </div>
+                      )}
+
+                      {isVideoComplete && (
+                        <div className="flex items-center gap-2 text-xs text-green-600">
+                          <Check className="h-3.5 w-3.5" />
+                          <span>Video ready for download</span>
+                        </div>
+                      )}
+
+                      {isVideoError && (
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-destructive">
+                            Export failed: {videoExportStatus?.error || 'Unknown error'}
+                          </span>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleStartVideoExport}
+                            className="gap-1.5"
+                          >
+                            <RefreshCw className="h-3 w-3" />
+                            Retry
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="p-4 rounded-md bg-secondary/50">
+                      <div className="flex items-center gap-3">
+                        <div className="h-10 w-10 rounded-md bg-orange-500/10 flex items-center justify-center">
+                          <Disc className="h-5 w-5 text-orange-500" />
+                        </div>
+                        <div className="flex-1">
+                          <p className="text-sm font-medium">CDG + MP3 (ZIP)</p>
+                          <p className="text-xs text-muted-foreground">CD+Graphics format for karaoke players</p>
+                        </div>
+                        <Button
+                          variant="outline"
+                          onClick={handleExportCDG}
+                          disabled={isExportingCDG}
+                          className="gap-2"
+                        >
+                          {isExportingCDG ? (
+                            <>
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              Exporting...
+                            </>
+                          ) : (
+                            <>
+                              <Download className="h-4 w-4" />
+                              Export
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </TabsContent>
           </div>
