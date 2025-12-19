@@ -4,7 +4,7 @@ import multer from 'multer';
 import { createExpressMiddleware } from '@trpc/server/adapters/express';
 import { fileURLToPath } from 'url';
 import { dirname, join, extname } from 'path';
-import { existsSync, mkdirSync, unlinkSync } from 'fs';
+import { existsSync, mkdirSync, unlinkSync, readFileSync } from 'fs';
 import ffmpeg from 'fluent-ffmpeg';
 import { nanoid } from 'nanoid';
 
@@ -17,6 +17,7 @@ const __dirname = dirname(__filename);
 
 const UPLOAD_DIR = join(__dirname, '../uploads');
 const DATA_DIR = join(__dirname, '../data');
+const CLIENT_DIST = join(__dirname, '../../client/dist');
 
 [UPLOAD_DIR, DATA_DIR].forEach(dir => {
   if (!existsSync(dir)) {
@@ -28,8 +29,12 @@ initializeDatabase();
 
 const app = express();
 
+const isProduction = process.env.NODE_ENV === 'production';
+
 app.use(cors({
-  origin: ['http://localhost:5173', 'http://127.0.0.1:5173'],
+  origin: isProduction 
+    ? true 
+    : ['http://localhost:5173', 'http://127.0.0.1:5173'],
   credentials: true,
 }));
 
@@ -135,9 +140,25 @@ app.use(
   })
 );
 
+if (isProduction && existsSync(CLIENT_DIST)) {
+  app.use(express.static(CLIENT_DIST));
+  
+  app.get('*', (_req, res) => {
+    const indexPath = join(CLIENT_DIST, 'index.html');
+    if (existsSync(indexPath)) {
+      res.sendFile(indexPath);
+    } else {
+      res.status(404).send('Not found');
+    }
+  });
+}
+
 const PORT = process.env.PORT || 3001;
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
+  if (isProduction) {
+    console.log('Running in production mode');
+  }
 });
 
