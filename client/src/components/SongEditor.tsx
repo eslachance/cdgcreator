@@ -282,6 +282,8 @@ export function SongEditor({ songId, onBack }: SongEditorProps) {
         <div className="flex-1 flex flex-col p-4 gap-4 overflow-hidden">
           <AudioPlayer
             audioPath={song.audioPath}
+            vocalsPath={song.vocalsPath}
+            instrumentalPath={song.instrumentalPath}
             duration={song.duration}
             currentTime={currentTime}
             onTimeUpdate={handleTimeUpdate}

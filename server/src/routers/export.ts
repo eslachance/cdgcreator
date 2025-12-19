@@ -22,6 +22,9 @@ interface SongRow {
   post_buffer: number;
   title_card: string | null;
   end_card: string | null;
+  vocals_path: string | null;
+  instrumental_path: string | null;
+  separation_status: string | null;
 }
 
 interface CardData {
@@ -177,7 +180,11 @@ async function runVideoExport(jobId: string, songId: string) {
     const tempDir = os.tmpdir();
     const outputId = nanoid();
     const outputPath = path.join(tempDir, `karaoke_${outputId}.mp4`);
-    const audioPath = path.join(process.cwd(), song.audio_path);
+    
+    const useInstrumental = song.separation_status === 'complete' && song.instrumental_path;
+    const audioPath = useInstrumental 
+      ? path.join(process.cwd(), song.instrumental_path!.replace(/^\//, ''))
+      : path.join(process.cwd(), song.audio_path);
     
     let paddedAudioPath = audioPath;
     
@@ -329,13 +336,16 @@ export const exportRouter = router({
         postBuffer,
       });
       
-      const audioPath = path.join(process.cwd(), song.audio_path);
+      const useInstrumental = song.separation_status === 'complete' && song.instrumental_path;
+      const audioSourcePath = useInstrumental 
+        ? path.join(process.cwd(), song.instrumental_path!.replace(/^\//, ''))
+        : path.join(process.cwd(), song.audio_path);
       
       let audioBuffer: Buffer;
       if (preBuffer > 0 || postBuffer > 0) {
-        audioBuffer = await padAudioWithSilence(audioPath, preBuffer, postBuffer);
+        audioBuffer = await padAudioWithSilence(audioSourcePath, preBuffer, postBuffer);
       } else {
-        audioBuffer = fs.readFileSync(audioPath);
+        audioBuffer = fs.readFileSync(audioSourcePath);
       }
       
       const baseName = song.artist 

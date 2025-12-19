@@ -1,13 +1,15 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
-import { Play, Pause, SkipBack, Volume2, VolumeX } from 'lucide-react';
-import { formatTime, formatTimeWithSign } from '@/lib/utils';
+import { Play, Pause, SkipBack, Volume2, VolumeX, Mic, Music } from 'lucide-react';
+import { formatTimeWithSign } from '@/lib/utils';
 
 interface AudioPlayerProps {
   audioPath: string | null;
+  vocalsPath?: string | null;
+  instrumentalPath?: string | null;
   duration: number | null;
-  currentTime: number; // Virtual time (can be negative for pre-buffer)
+  currentTime: number;
   onTimeUpdate: (time: number) => void;
   isPlaying: boolean;
   onPlayPause: (playing: boolean) => void;
@@ -15,34 +17,33 @@ interface AudioPlayerProps {
   postBuffer?: number;
 }
 
-const VOLUME_STORAGE_KEY = 'last_volume';
-const DEFAULT_VOLUME = 0.5; // Safe default to protect eardrums
+const MUSIC_VOLUME_STORAGE_KEY = 'music_volume';
+const VOCALS_VOLUME_STORAGE_KEY = 'vocals_volume';
+const DEFAULT_VOLUME = 0.5;
 
-function getStoredVolume(): number {
+function getStoredVolume(key: string): number {
   try {
-    const stored = localStorage.getItem(VOLUME_STORAGE_KEY);
+    const stored = localStorage.getItem(key);
     if (stored !== null) {
       const parsed = parseFloat(stored);
       if (!isNaN(parsed) && parsed >= 0 && parsed <= 1) {
         return parsed;
       }
     }
-  } catch {
-    // localStorage might not be available
-  }
+  } catch {}
   return DEFAULT_VOLUME;
 }
 
-function storeVolume(volume: number): void {
+function storeVolume(key: string, volume: number): void {
   try {
-    localStorage.setItem(VOLUME_STORAGE_KEY, volume.toString());
-  } catch {
-    // localStorage might not be available
-  }
+    localStorage.setItem(key, volume.toString());
+  } catch {}
 }
 
 export function AudioPlayer({
   audioPath,
+  vocalsPath,
+  instrumentalPath,
   duration,
   currentTime,
   onTimeUpdate,
@@ -51,34 +52,53 @@ export function AudioPlayer({
   preBuffer = 0,
   postBuffer = 0,
 }: AudioPlayerProps) {
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const [volume, setVolume] = useState(getStoredVolume);
-  const [isMuted, setIsMuted] = useState(false);
+  const musicAudioRef = useRef<HTMLAudioElement>(null);
+  const vocalsAudioRef = useRef<HTMLAudioElement>(null);
+  const [musicVolume, setMusicVolume] = useState(() => getStoredVolume(MUSIC_VOLUME_STORAGE_KEY));
+  const [vocalsVolume, setVocalsVolume] = useState(() => getStoredVolume(VOCALS_VOLUME_STORAGE_KEY));
+  const [isMusicMuted, setIsMusicMuted] = useState(false);
+  const [isVocalsMuted, setIsVocalsMuted] = useState(false);
   const animationRef = useRef<number>();
   const lastFrameTimeRef = useRef<number>(0);
 
-  // Calculate total virtual duration
+  const hasSeparatedAudio = Boolean(instrumentalPath && vocalsPath);
+  const effectiveMusicPath = hasSeparatedAudio ? instrumentalPath : audioPath;
+
   const audioDuration = duration || 0;
-  const totalDuration = preBuffer + audioDuration + postBuffer;
   const minTime = -preBuffer;
   const maxTime = audioDuration + postBuffer;
 
-  // Set initial volume on audio element when it's available
   useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.volume = isMuted ? 0 : volume;
+    if (musicAudioRef.current) {
+      musicAudioRef.current.volume = isMusicMuted ? 0 : musicVolume;
     }
-  }, [volume, isMuted]);
+  }, [musicVolume, isMusicMuted]);
 
-  // Convert virtual time to audio time
+  useEffect(() => {
+    if (vocalsAudioRef.current) {
+      vocalsAudioRef.current.volume = isVocalsMuted ? 0 : vocalsVolume;
+    }
+  }, [vocalsVolume, isVocalsMuted]);
+
   const virtualToAudioTime = useCallback((virtualTime: number) => {
     return Math.max(0, Math.min(virtualTime, audioDuration));
   }, [audioDuration]);
 
-  // Check if we're in the audio playback range
   const isInAudioRange = useCallback((virtualTime: number) => {
     return virtualTime >= 0 && virtualTime < audioDuration;
   }, [audioDuration]);
+
+  const syncAudioElements = useCallback((time: number) => {
+    const musicAudio = musicAudioRef.current;
+    const vocalsAudio = vocalsAudioRef.current;
+    
+    if (musicAudio && Math.abs(musicAudio.currentTime - time) > 0.1) {
+      musicAudio.currentTime = time;
+    }
+    if (vocalsAudio && hasSeparatedAudio && Math.abs(vocalsAudio.currentTime - time) > 0.1) {
+      vocalsAudio.currentTime = time;
+    }
+  }, [hasSeparatedAudio]);
 
   const updateTime = useCallback(() => {
     const now = performance.now();
@@ -89,27 +109,33 @@ export function AudioPlayer({
       const deltaSeconds = deltaMs / 1000;
       const newVirtualTime = currentTime + deltaSeconds;
 
-      // Check if we should be playing audio
       if (isInAudioRange(newVirtualTime)) {
-        const audio = audioRef.current;
-        if (audio) {
-          // If audio was paused (e.g., coming from pre-buffer), start it
-          if (audio.paused) {
-            audio.currentTime = virtualToAudioTime(newVirtualTime);
-            audio.play().catch(() => {});
+        const musicAudio = musicAudioRef.current;
+        const vocalsAudio = vocalsAudioRef.current;
+        
+        if (musicAudio) {
+          if (musicAudio.paused) {
+            musicAudio.currentTime = virtualToAudioTime(newVirtualTime);
+            musicAudio.play().catch(() => {});
           }
-          // Update virtual time based on audio time
-          onTimeUpdate(audio.currentTime);
+          if (vocalsAudio && hasSeparatedAudio && vocalsAudio.paused) {
+            vocalsAudio.currentTime = virtualToAudioTime(newVirtualTime);
+            vocalsAudio.play().catch(() => {});
+          }
+          onTimeUpdate(musicAudio.currentTime);
         }
       } else {
-        // We're in pre-buffer or post-buffer, just advance virtual time
-        const audio = audioRef.current;
-        if (audio && !audio.paused) {
-          audio.pause();
+        const musicAudio = musicAudioRef.current;
+        const vocalsAudio = vocalsAudioRef.current;
+        
+        if (musicAudio && !musicAudio.paused) {
+          musicAudio.pause();
+        }
+        if (vocalsAudio && !vocalsAudio.paused) {
+          vocalsAudio.pause();
         }
         
         if (newVirtualTime >= maxTime) {
-          // Reached the end
           onTimeUpdate(maxTime);
           onPlayPause(false);
           return;
@@ -120,16 +146,21 @@ export function AudioPlayer({
 
       animationRef.current = requestAnimationFrame(updateTime);
     }
-  }, [isPlaying, currentTime, onTimeUpdate, onPlayPause, isInAudioRange, virtualToAudioTime, maxTime]);
+  }, [isPlaying, currentTime, onTimeUpdate, onPlayPause, isInAudioRange, virtualToAudioTime, maxTime, hasSeparatedAudio]);
 
   useEffect(() => {
     if (isPlaying) {
       lastFrameTimeRef.current = performance.now();
       animationRef.current = requestAnimationFrame(updateTime);
     } else {
-      const audio = audioRef.current;
-      if (audio && !audio.paused) {
-        audio.pause();
+      const musicAudio = musicAudioRef.current;
+      const vocalsAudio = vocalsAudioRef.current;
+      
+      if (musicAudio && !musicAudio.paused) {
+        musicAudio.pause();
+      }
+      if (vocalsAudio && !vocalsAudio.paused) {
+        vocalsAudio.pause();
       }
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
@@ -144,76 +175,90 @@ export function AudioPlayer({
   }, [isPlaying, updateTime]);
 
   useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
+    const musicAudio = musicAudioRef.current;
+    if (!musicAudio) return;
 
     const handleEnded = () => {
-      // Audio ended, but we might have post-buffer to continue
       if (postBuffer > 0) {
-        // Continue playing (virtual time) into post-buffer
-        // The updateTime loop will handle this
       } else {
         onPlayPause(false);
         onTimeUpdate(minTime);
       }
     };
 
-    audio.addEventListener('ended', handleEnded);
-    return () => audio.removeEventListener('ended', handleEnded);
+    musicAudio.addEventListener('ended', handleEnded);
+    return () => musicAudio.removeEventListener('ended', handleEnded);
   }, [onPlayPause, onTimeUpdate, postBuffer, minTime]);
 
   useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio || isPlaying) return;
+    if (isPlaying) return;
     
-    // Sync audio position when seeking while paused
     if (isInAudioRange(currentTime)) {
       const audioTime = virtualToAudioTime(currentTime);
-      if (Math.abs(audio.currentTime - audioTime) > 0.1) {
-        audio.currentTime = audioTime;
-      }
+      syncAudioElements(audioTime);
     }
-  }, [currentTime, isPlaying, isInAudioRange, virtualToAudioTime]);
+  }, [currentTime, isPlaying, isInAudioRange, virtualToAudioTime, syncAudioElements]);
 
   const handleSeek = (value: number[]) => {
     const newVirtualTime = value[0];
-    const audio = audioRef.current;
     
-    if (audio && isInAudioRange(newVirtualTime)) {
-      audio.currentTime = virtualToAudioTime(newVirtualTime);
+    if (isInAudioRange(newVirtualTime)) {
+      syncAudioElements(virtualToAudioTime(newVirtualTime));
     }
     
     onTimeUpdate(newVirtualTime);
   };
 
-  const handleVolumeChange = (value: number[]) => {
+  const handleMusicVolumeChange = (value: number[]) => {
     const newVolume = value[0];
-    setVolume(newVolume);
-    storeVolume(newVolume); // Persist to localStorage
-    if (audioRef.current) {
-      audioRef.current.volume = newVolume;
+    setMusicVolume(newVolume);
+    storeVolume(MUSIC_VOLUME_STORAGE_KEY, newVolume);
+    if (musicAudioRef.current) {
+      musicAudioRef.current.volume = newVolume;
     }
-    if (newVolume > 0 && isMuted) {
-      setIsMuted(false);
+    if (newVolume > 0 && isMusicMuted) {
+      setIsMusicMuted(false);
     }
   };
 
-  const toggleMute = () => {
-    if (audioRef.current) {
-      if (isMuted) {
-        audioRef.current.volume = volume;
-        setIsMuted(false);
+  const handleVocalsVolumeChange = (value: number[]) => {
+    const newVolume = value[0];
+    setVocalsVolume(newVolume);
+    storeVolume(VOCALS_VOLUME_STORAGE_KEY, newVolume);
+    if (vocalsAudioRef.current) {
+      vocalsAudioRef.current.volume = newVolume;
+    }
+    if (newVolume > 0 && isVocalsMuted) {
+      setIsVocalsMuted(false);
+    }
+  };
+
+  const toggleMusicMute = () => {
+    if (musicAudioRef.current) {
+      if (isMusicMuted) {
+        musicAudioRef.current.volume = musicVolume;
+        setIsMusicMuted(false);
       } else {
-        audioRef.current.volume = 0;
-        setIsMuted(true);
+        musicAudioRef.current.volume = 0;
+        setIsMusicMuted(true);
+      }
+    }
+  };
+
+  const toggleVocalsMute = () => {
+    if (vocalsAudioRef.current) {
+      if (isVocalsMuted) {
+        vocalsAudioRef.current.volume = vocalsVolume;
+        setIsVocalsMuted(false);
+      } else {
+        vocalsAudioRef.current.volume = 0;
+        setIsVocalsMuted(true);
       }
     }
   };
 
   const handleRestart = () => {
-    if (audioRef.current) {
-      audioRef.current.currentTime = 0;
-    }
+    syncAudioElements(0);
     onTimeUpdate(minTime);
   };
 
@@ -226,74 +271,131 @@ export function AudioPlayer({
   }
 
   return (
-    <div className="flex items-center gap-4 px-4 py-3 rounded-lg bg-card border border-border">
-      <audio ref={audioRef} src={audioPath} preload="metadata" />
+    <div className="flex flex-col gap-3 px-4 py-3 rounded-lg bg-card border border-border">
+      <audio ref={musicAudioRef} src={effectiveMusicPath || undefined} preload="metadata" />
+      {hasSeparatedAudio && (
+        <audio ref={vocalsAudioRef} src={vocalsPath || undefined} preload="metadata" />
+      )}
       
-      <div className="flex items-center gap-2">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8"
-          onClick={handleRestart}
-        >
-          <SkipBack className="h-4 w-4" />
-        </Button>
-        
-        <Button
-          variant="default"
-          size="icon"
-          className="h-10 w-10 rounded-full"
-          onClick={() => onPlayPause(!isPlaying)}
-        >
-          {isPlaying ? (
-            <Pause className="h-5 w-5" />
-          ) : (
-            <Play className="h-5 w-5 ml-0.5" />
-          )}
-        </Button>
+      <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={handleRestart}
+          >
+            <SkipBack className="h-4 w-4" />
+          </Button>
+          
+          <Button
+            variant="default"
+            size="icon"
+            className="h-10 w-10 rounded-full"
+            onClick={() => onPlayPause(!isPlaying)}
+          >
+            {isPlaying ? (
+              <Pause className="h-5 w-5" />
+            ) : (
+              <Play className="h-5 w-5 ml-0.5" />
+            )}
+          </Button>
+        </div>
+
+        <div className="flex-1 flex items-center gap-3">
+          <span className="text-sm font-mono text-muted-foreground w-20 text-right">
+            {formatTimeWithSign(currentTime)}
+          </span>
+          
+          <Slider
+            value={[currentTime]}
+            min={minTime}
+            max={maxTime}
+            step={0.01}
+            onValueChange={handleSeek}
+            className="flex-1"
+          />
+          
+          <span className="text-sm font-mono text-muted-foreground w-20">
+            {formatTimeWithSign(maxTime)}
+          </span>
+        </div>
       </div>
 
-      <div className="flex-1 flex items-center gap-3">
-        <span className="text-sm font-mono text-muted-foreground w-20 text-right">
-          {formatTimeWithSign(currentTime)}
-        </span>
-        
-        <Slider
-          value={[currentTime]}
-          min={minTime}
-          max={maxTime}
-          step={0.01}
-          onValueChange={handleSeek}
-          className="flex-1"
-        />
-        
-        <span className="text-sm font-mono text-muted-foreground w-20">
-          {formatTimeWithSign(maxTime)}
-        </span>
-      </div>
+      <div className="flex items-center gap-6">
+        <div className="flex items-center gap-2 flex-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={toggleMusicMute}
+          >
+            {isMusicMuted || musicVolume === 0 ? (
+              <VolumeX className="h-4 w-4" />
+            ) : (
+              <Music className="h-4 w-4" />
+            )}
+          </Button>
+          <span className="text-xs text-muted-foreground w-12">Music</span>
+          <Slider
+            value={[isMusicMuted ? 0 : musicVolume]}
+            max={1}
+            step={0.01}
+            onValueChange={handleMusicVolumeChange}
+            className="w-24"
+          />
+        </div>
 
-      <div className="flex items-center gap-2">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8"
-          onClick={toggleMute}
-        >
-          {isMuted || volume === 0 ? (
-            <VolumeX className="h-4 w-4" />
-          ) : (
-            <Volume2 className="h-4 w-4" />
-          )}
-        </Button>
-        <Slider
-          value={[isMuted ? 0 : volume]}
-          max={1}
-          step={0.01}
-          onValueChange={handleVolumeChange}
-          className="w-24"
-        />
+        {hasSeparatedAudio && (
+          <div className="flex items-center gap-2 flex-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={toggleVocalsMute}
+            >
+              {isVocalsMuted || vocalsVolume === 0 ? (
+                <VolumeX className="h-4 w-4" />
+              ) : (
+                <Mic className="h-4 w-4" />
+              )}
+            </Button>
+            <span className="text-xs text-muted-foreground w-12">Vocals</span>
+            <Slider
+              value={[isVocalsMuted ? 0 : vocalsVolume]}
+              max={1}
+              step={0.01}
+              onValueChange={handleVocalsVolumeChange}
+              className="w-24"
+            />
+          </div>
+        )}
+
+        {!hasSeparatedAudio && (
+          <div className="flex items-center gap-2 flex-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={toggleMusicMute}
+            >
+              {isMusicMuted || musicVolume === 0 ? (
+                <VolumeX className="h-4 w-4" />
+              ) : (
+                <Volume2 className="h-4 w-4" />
+              )}
+            </Button>
+            <span className="text-xs text-muted-foreground w-12">Volume</span>
+            <Slider
+              value={[isMusicMuted ? 0 : musicVolume]}
+              max={1}
+              step={0.01}
+              onValueChange={handleMusicVolumeChange}
+              className="w-24"
+            />
+          </div>
+        )}
       </div>
     </div>
   );
 }
-

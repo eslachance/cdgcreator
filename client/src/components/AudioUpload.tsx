@@ -1,19 +1,71 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
-import { Upload, FileAudio, Loader2, Check } from 'lucide-react';
+import { Upload, FileAudio, Loader2, Check, Wand2, AlertCircle, X } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { toast } from '@/hooks/use-toast';
+import type { SeparationStatus } from 'shared';
 
 interface AudioUploadProps {
   songId: string;
   currentAudioPath: string | null;
+  separationStatus?: SeparationStatus;
   onUploadComplete: () => void;
 }
 
-export function AudioUpload({ songId, currentAudioPath, onUploadComplete }: AudioUploadProps) {
+export function AudioUpload({ 
+  songId, 
+  currentAudioPath, 
+  separationStatus = 'pending',
+  onUploadComplete 
+}: AudioUploadProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isUploading, setIsUploading] = useState(false);
   const utils = trpc.useUtils();
+
+  const { data: demucsStatus } = trpc.songs.checkDemucsAvailable.useQuery();
+  const { data: separationInfo, refetch: refetchSeparation } = trpc.songs.getSeparationStatus.useQuery(
+    { id: songId },
+    { 
+      enabled: !!currentAudioPath,
+      refetchInterval: separationStatus === 'processing' ? 2000 : false,
+    }
+  );
+
+  const startSeparation = trpc.songs.startSeparation.useMutation({
+    onSuccess: (result) => {
+      if (result.status === 'started') {
+        toast({
+          title: 'Audio separation started',
+          description: 'This may take a few minutes...',
+        });
+        refetchSeparation();
+        utils.songs.getById.invalidate({ id: songId });
+      } else if (result.status === 'unavailable') {
+        toast({
+          variant: 'destructive',
+          title: 'Demucs not available',
+          description: 'Install Demucs to enable audio separation: pip install demucs',
+        });
+      }
+    },
+    onError: (error) => {
+      toast({
+        variant: 'destructive',
+        title: 'Separation failed',
+        description: error.message,
+      });
+    },
+  });
+
+  useEffect(() => {
+    if (separationInfo?.status === 'complete' && separationStatus === 'processing') {
+      utils.songs.getById.invalidate({ id: songId });
+      toast({
+        title: 'Audio separation complete!',
+        description: 'Vocals and instrumental tracks are now available.',
+      });
+    }
+  }, [separationInfo?.status, separationStatus, songId, utils.songs.getById]);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -68,6 +120,84 @@ export function AudioUpload({ songId, currentAudioPath, onUploadComplete }: Audi
     }
   };
 
+  const handleStartSeparation = () => {
+    startSeparation.mutate({ id: songId });
+  };
+
+  const renderSeparationStatus = () => {
+    const status = separationInfo?.status || separationStatus;
+    
+    if (!currentAudioPath) return null;
+    
+    switch (status) {
+      case 'complete':
+        return (
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-green-500/10 text-green-500 text-xs">
+            <Check className="h-3 w-3" />
+            <span>Separated</span>
+          </div>
+        );
+      case 'processing':
+        return (
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-blue-500/10 text-blue-500 text-xs">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            <span>Separating... {separationInfo?.progress || 0}%</span>
+          </div>
+        );
+      case 'failed':
+        return (
+          <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1 px-2 py-1 rounded-md bg-red-500/10 text-red-500 text-xs">
+              <X className="h-3 w-3" />
+              <span>Failed</span>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 text-xs"
+              onClick={handleStartSeparation}
+              disabled={startSeparation.isPending}
+            >
+              Retry
+            </Button>
+          </div>
+        );
+      case 'unavailable':
+        return (
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-yellow-500/10 text-yellow-600 text-xs" title="Install Demucs to enable audio separation">
+            <AlertCircle className="h-3 w-3" />
+            <span>Demucs not installed</span>
+          </div>
+        );
+      case 'pending':
+      default:
+        if (!demucsStatus?.available) {
+          return (
+            <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-muted text-muted-foreground text-xs" title="Install Demucs to enable audio separation">
+              <AlertCircle className="h-3 w-3" />
+              <span>Separation unavailable</span>
+            </div>
+          );
+        }
+        return (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1.5 text-xs"
+            onClick={handleStartSeparation}
+            disabled={startSeparation.isPending}
+          >
+            {startSeparation.isPending ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Wand2 className="h-3 w-3" />
+            )}
+            Separate Audio
+          </Button>
+        );
+    }
+  };
+
   return (
     <div className="flex items-center gap-3">
       <input
@@ -85,6 +215,7 @@ export function AudioUpload({ songId, currentAudioPath, onUploadComplete }: Audi
             <span>Audio loaded</span>
             <Check className="h-3 w-3" />
           </div>
+          {renderSeparationStatus()}
           <Button
             variant="outline"
             size="sm"
@@ -124,4 +255,3 @@ export function AudioUpload({ songId, currentAudioPath, onUploadComplete }: Audi
     </div>
   );
 }
-

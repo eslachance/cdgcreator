@@ -2,6 +2,9 @@ import { z } from 'zod';
 
 export const DEFAULT_LINES_COUNT = 6;
 
+export const SeparationStatusSchema = z.enum(['pending', 'processing', 'complete', 'failed', 'unavailable']);
+export type SeparationStatus = z.infer<typeof SeparationStatusSchema>;
+
 // Card schema for title and end cards
 export const CardSchema = z.object({
   enabled: z.boolean().default(false),
@@ -47,10 +50,14 @@ export const SongSchema = z.object({
   audioPath: z.string().nullable(),
   duration: z.number().nullable(),
   linesCount: z.number().default(DEFAULT_LINES_COUNT),
-  preBuffer: z.number().default(0),  // Seconds of silence before audio
-  postBuffer: z.number().default(0), // Seconds of silence after audio
+  preBuffer: z.number().default(0),
+  postBuffer: z.number().default(0),
   titleCard: CardSchema.optional(),
   endCard: CardSchema.optional(),
+  vocalsPath: z.string().nullable().optional(),
+  instrumentalPath: z.string().nullable().optional(),
+  separationStatus: SeparationStatusSchema.default('pending'),
+  separationError: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

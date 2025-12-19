@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -31,11 +31,14 @@ import {
   Video,
   Disc,
   RefreshCw,
+  Wand2,
+  X,
+  AlertCircle,
 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { toast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
-import type { Singer, LyricLine, Card } from 'shared';
+import type { Singer, LyricLine, Card, SeparationStatus } from 'shared';
 
 interface SongSettingsDialogProps {
   songId: string;
@@ -49,6 +52,10 @@ interface SongSettingsDialogProps {
     postBuffer: number | null;
     titleCard: Card | null;
     endCard: Card | null;
+    vocalsPath?: string | null;
+    instrumentalPath?: string | null;
+    separationStatus?: SeparationStatus;
+    separationError?: string | null;
   };
   singers: Singer[];
   lyrics: LyricLine[];
@@ -143,6 +150,58 @@ export function SongSettingsDialog({
   const startVideoExport = trpc.export.startVideoExport.useMutation();
   const downloadVideo = trpc.export.downloadVideo.useMutation();
   const cancelVideoExport = trpc.export.cancelVideoExport.useMutation();
+  
+  const { data: demucsStatus } = trpc.songs.checkDemucsAvailable.useQuery();
+  const { data: separationInfo, refetch: refetchSeparation } = trpc.songs.getSeparationStatus.useQuery(
+    { id: songId },
+    { 
+      enabled: !!song.audioPath,
+      refetchInterval: song.separationStatus === 'processing' ? 2000 : false,
+    }
+  );
+
+  const startSeparation = trpc.songs.startSeparation.useMutation({
+    onSuccess: (result) => {
+      if (result.status === 'started') {
+        toast({
+          title: 'Audio separation started',
+          description: 'This may take a few minutes...',
+        });
+        refetchSeparation();
+        onSongUpdate();
+      } else if (result.status === 'unavailable') {
+        toast({
+          variant: 'destructive',
+          title: 'Demucs not available',
+          description: 'Install Demucs to enable audio separation: pip install demucs',
+        });
+        onSongUpdate();
+      }
+    },
+    onError: (error) => {
+      toast({
+        variant: 'destructive',
+        title: 'Separation failed',
+        description: error.message,
+      });
+    },
+  });
+
+  const effectiveSeparationStatus = separationInfo?.status || song.separationStatus || 'pending';
+
+  const handleStartSeparation = () => {
+    startSeparation.mutate({ id: songId });
+  };
+
+  useEffect(() => {
+    if (separationInfo?.status === 'complete' && song.separationStatus === 'processing') {
+      onSongUpdate();
+      toast({
+        title: 'Audio separation complete!',
+        description: 'Vocals and instrumental tracks are now available.',
+      });
+    }
+  }, [separationInfo?.status, song.separationStatus, onSongUpdate]);
   
   const { data: videoExportStatus, refetch: refetchVideoStatus } = trpc.export.getVideoExportStatus.useQuery(
     { songId },
@@ -458,7 +517,7 @@ export function SongSettingsDialog({
                   <FileAudio className="h-4 w-4" />
                   Audio File
                 </div>
-                <div className="p-3 rounded-md bg-secondary/50">
+                <div className="p-3 rounded-md bg-secondary/50 space-y-3">
                   <input
                     ref={audioInputRef}
                     type="file"
@@ -508,6 +567,78 @@ export function SongSettingsDialog({
                         </>
                       )}
                     </Button>
+                  )}
+
+                  {song.audioPath && (
+                    <div className="pt-2 border-t border-border/50">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <Wand2 className="h-4 w-4" />
+                          <span>Audio Separation</span>
+                        </div>
+                        {effectiveSeparationStatus === 'pending' && demucsStatus?.available && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleStartSeparation}
+                            disabled={startSeparation.isPending}
+                            className="gap-1.5"
+                          >
+                            {startSeparation.isPending ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Wand2 className="h-3.5 w-3.5" />
+                            )}
+                            Separate
+                          </Button>
+                        )}
+                        {effectiveSeparationStatus === 'complete' && (
+                          <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-green-500/10 text-green-500 text-xs">
+                            <Check className="h-3 w-3" />
+                            <span>Separated</span>
+                          </div>
+                        )}
+                        {effectiveSeparationStatus === 'processing' && (
+                          <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-blue-500/10 text-blue-500 text-xs">
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            <span>Separating... {separationInfo?.progress || 0}%</span>
+                          </div>
+                        )}
+                        {effectiveSeparationStatus === 'failed' && (
+                          <div className="flex items-center gap-1.5">
+                            <div className="flex items-center gap-1 px-2 py-1 rounded-md bg-red-500/10 text-red-500 text-xs">
+                              <X className="h-3 w-3" />
+                              <span>Failed</span>
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 text-xs"
+                              onClick={handleStartSeparation}
+                              disabled={startSeparation.isPending}
+                            >
+                              Retry
+                            </Button>
+                          </div>
+                        )}
+                        {(effectiveSeparationStatus === 'unavailable' || (effectiveSeparationStatus === 'pending' && !demucsStatus?.available)) && (
+                          <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-yellow-500/10 text-yellow-600 text-xs" title="Install Demucs to enable audio separation: pip install demucs">
+                            <AlertCircle className="h-3 w-3" />
+                            <span>Demucs not installed</span>
+                          </div>
+                        )}
+                      </div>
+                      {effectiveSeparationStatus === 'complete' && (
+                        <p className="text-xs text-muted-foreground mt-2">
+                          Vocals and instrumental tracks are now available. The exported CDG and video will use only the instrumental track.
+                        </p>
+                      )}
+                      {effectiveSeparationStatus === 'pending' && demucsStatus?.available && (
+                        <p className="text-xs text-muted-foreground mt-2">
+                          Separate vocals from music to create a professional karaoke track.
+                        </p>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>

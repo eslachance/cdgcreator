@@ -82,6 +82,18 @@ function runMigrations() {
   if (!songColumns.includes('end_card')) {
     db.exec(`ALTER TABLE songs ADD COLUMN end_card TEXT`);  // JSON string
   }
+  if (!songColumns.includes('vocals_path')) {
+    db.exec(`ALTER TABLE songs ADD COLUMN vocals_path TEXT`);
+  }
+  if (!songColumns.includes('instrumental_path')) {
+    db.exec(`ALTER TABLE songs ADD COLUMN instrumental_path TEXT`);
+  }
+  if (!songColumns.includes('separation_status')) {
+    db.exec(`ALTER TABLE songs ADD COLUMN separation_status TEXT DEFAULT 'pending'`);
+  }
+  if (!songColumns.includes('separation_error')) {
+    db.exec(`ALTER TABLE songs ADD COLUMN separation_error TEXT`);
+  }
 
   const singerInfo = db.prepare("PRAGMA table_info(singers)").all() as { name: string }[];
   const singerColumns = singerInfo.map(col => col.name);

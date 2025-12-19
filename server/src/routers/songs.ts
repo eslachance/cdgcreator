@@ -1,5 +1,8 @@
 import { z } from 'zod';
 import { nanoid } from 'nanoid';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
 import { router, publicProcedure } from '../trpc/index.js';
 import { db } from '../db/index.js';
 import {
@@ -8,7 +11,15 @@ import {
   DEFAULT_LINES_COUNT,
   type Song,
   type Card,
+  type SeparationStatus,
 } from 'shared';
+import { separateAudio, checkDemucsAvailable, type SeparationProgress } from '../lib/audio-separator.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const UPLOAD_DIR = path.join(__dirname, '../../uploads');
+
+const separationJobs = new Map<string, { progress: number; message: string }>();
 
 function parseCard(json: string | null): Card | undefined {
   if (!json) return undefined;
@@ -31,6 +42,10 @@ function rowToSong(row: any): Song {
     postBuffer: row.post_buffer ?? 0,
     titleCard: parseCard(row.title_card),
     endCard: parseCard(row.end_card),
+    vocalsPath: row.vocals_path || null,
+    instrumentalPath: row.instrumental_path || null,
+    separationStatus: (row.separation_status as SeparationStatus) || 'pending',
+    separationError: row.separation_error || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -138,6 +153,94 @@ export const songsRouter = router({
     .mutation(({ input }) => {
       db.prepare('DELETE FROM songs WHERE id = ?').run(input.id);
       return { success: true };
+    }),
+
+  checkDemucsAvailable: publicProcedure.query(async () => {
+    const available = await checkDemucsAvailable();
+    return { available };
+  }),
+
+  startSeparation: publicProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ input }) => {
+      const row = db.prepare('SELECT * FROM songs WHERE id = ?').get(input.id) as any;
+      if (!row) {
+        throw new Error('Song not found');
+      }
+
+      if (!row.audio_path) {
+        throw new Error('No audio file uploaded');
+      }
+
+      if (row.separation_status === 'processing') {
+        return { status: 'already_processing' as const };
+      }
+
+      const available = await checkDemucsAvailable();
+      if (!available) {
+        const now = new Date().toISOString();
+        db.prepare(`
+          UPDATE songs SET separation_status = ?, separation_error = ?, updated_at = ? WHERE id = ?
+        `).run('unavailable', 'Demucs is not installed', now, input.id);
+        return { status: 'unavailable' as const, error: 'Demucs is not installed' };
+      }
+
+      const now = new Date().toISOString();
+      db.prepare(`
+        UPDATE songs SET separation_status = ?, separation_error = NULL, updated_at = ? WHERE id = ?
+      `).run('processing', now, input.id);
+      separationJobs.set(input.id, { progress: 0, message: 'Starting...' });
+
+      const audioPath = path.join(process.cwd(), row.audio_path.replace(/^\//, ''));
+
+      separateAudio(audioPath, UPLOAD_DIR, (progress: SeparationProgress) => {
+        separationJobs.set(input.id, { progress: progress.progress, message: progress.message || '' });
+      }).then((result) => {
+        const now = new Date().toISOString();
+        if (result.status === 'complete') {
+          db.prepare(`
+            UPDATE songs SET 
+              separation_status = ?,
+              vocals_path = ?,
+              instrumental_path = ?,
+              separation_error = NULL,
+              updated_at = ?
+            WHERE id = ?
+          `).run('complete', result.vocalsPath, result.instrumentalPath, now, input.id);
+        } else {
+          db.prepare(`
+            UPDATE songs SET separation_status = ?, separation_error = ?, updated_at = ? WHERE id = ?
+          `).run(result.status, result.error || null, now, input.id);
+        }
+        separationJobs.delete(input.id);
+      }).catch((err) => {
+        const now = new Date().toISOString();
+        db.prepare(`
+          UPDATE songs SET separation_status = ?, separation_error = ?, updated_at = ? WHERE id = ?
+        `).run('failed', err.message, now, input.id);
+        separationJobs.delete(input.id);
+      });
+
+      return { status: 'started' as const };
+    }),
+
+  getSeparationStatus: publicProcedure
+    .input(z.object({ id: z.string() }))
+    .query(({ input }) => {
+      const row = db.prepare('SELECT separation_status, separation_error, vocals_path, instrumental_path FROM songs WHERE id = ?').get(input.id) as any;
+      if (!row) {
+        throw new Error('Song not found');
+      }
+
+      const job = separationJobs.get(input.id);
+      return {
+        status: row.separation_status as SeparationStatus,
+        error: row.separation_error,
+        vocalsPath: row.vocals_path,
+        instrumentalPath: row.instrumental_path,
+        progress: job?.progress ?? (row.separation_status === 'complete' ? 100 : 0),
+        message: job?.message,
+      };
     }),
 });
 
