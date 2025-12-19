@@ -233,7 +233,9 @@ async function runVideoExport(jobId: string, songId: string) {
       try { fs.unlinkSync(paddedAudioPath); } catch {}
     }
     
-    const baseName = song.title.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '_');
+    const baseName = song.artist 
+      ? `${song.artist} - ${song.title}`.replace(/[^a-zA-Z0-9\s\-]/g, '').replace(/\s+/g, ' ').trim()
+      : song.title.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
     
     exportStore.updateJob(jobId, {
       step: 'complete',
@@ -336,7 +338,9 @@ export const exportRouter = router({
         audioBuffer = fs.readFileSync(audioPath);
       }
       
-      const baseName = song.title.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '_');
+      const baseName = song.artist 
+        ? `${song.artist} - ${song.title}`.replace(/[^a-zA-Z0-9\s\-]/g, '').replace(/\s+/g, ' ').trim()
+        : song.title.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
       
       const zipBuffer = await createZipBuffer([
         { name: `${baseName}.cdg`, data: cdgBuffer },

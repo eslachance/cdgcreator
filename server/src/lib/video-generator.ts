@@ -331,9 +331,7 @@ function createLyricsSvg(
       const startX = (VIDEO_WIDTH - textWidth) / 2;
       
       if (lyricData.highlightProgress > 0 && lyricData.highlightProgress < 1) {
-        const highlightChars = Math.floor(text.length * lyricData.highlightProgress);
-        
-        const clipWidth = highlightChars * charWidth;
+        const clipWidth = textWidth * lyricData.highlightProgress;
         const clipId = `clip-${lineIndex}`;
         
         svg += `
