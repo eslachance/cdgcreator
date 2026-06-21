@@ -1,5 +1,5 @@
+import { useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { BrowserRouter, Routes, Route, useNavigate, useParams } from 'react-router-dom';
 import { trpc, trpcClient } from '@/lib/trpc';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Toaster } from '@/components/ui/toaster';
@@ -17,8 +17,17 @@ const queryClient = new QueryClient({
   },
 });
 
-function HomePage() {
-  const navigate = useNavigate();
+function AppContent() {
+  const [selectedSongId, setSelectedSongId] = useState<string | null>(null);
+
+  if (selectedSongId) {
+    return (
+      <SongEditor
+        songId={selectedSongId}
+        onBack={() => setSelectedSongId(null)}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen flex">
@@ -35,7 +44,7 @@ function HomePage() {
               </p>
             </div>
           </div>
-          <NewSongDialog onSongCreated={(id) => navigate(`/edit/${id}`)} />
+          <NewSongDialog onSongCreated={setSelectedSongId} />
         </div>
 
         <div className="flex-1 p-4">
@@ -43,8 +52,8 @@ function HomePage() {
             Your Songs
           </h2>
           <SongList
-            selectedSongId={null}
-            onSelectSong={(id) => navigate(`/edit/${id}`)}
+            selectedSongId={selectedSongId}
+            onSelectSong={setSelectedSongId}
           />
         </div>
       </div>
@@ -68,34 +77,12 @@ function HomePage() {
   );
 }
 
-function EditPage() {
-  const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
-
-  if (!id) {
-    navigate('/');
-    return null;
-  }
-
-  return (
-    <SongEditor
-      songId={id}
-      onBack={() => navigate('/')}
-    />
-  );
-}
-
 function App() {
   return (
     <trpc.Provider client={trpcClient} queryClient={queryClient}>
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
-          <BrowserRouter>
-            <Routes>
-              <Route path="/" element={<HomePage />} />
-              <Route path="/edit/:id" element={<EditPage />} />
-            </Routes>
-          </BrowserRouter>
+          <AppContent />
           <Toaster />
         </TooltipProvider>
       </QueryClientProvider>
