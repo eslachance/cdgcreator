@@ -40,20 +40,6 @@
   --radius-xl: 1rem;
 }
 
-@font-face {
-  font-family: "Instrument Sans";
-  src: url("https://fonts.gstatic.com/s/instrumentsans/v1/pximypc9vsFDm051Uf6KVwgkfoSxQ0GsQv8ToedPibnr-yp2JGEJOH9npST3QfCnH3yP.woff2") format("woff2");
-  font-weight: 400 700;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "JetBrains Mono";
-  src: url("https://fonts.gstatic.com/s/jetbrainsmono/v18/tDbY2o-flEEny0FZhsfKu5WU4zr3E_BX0PnT8RD8yKxjPVmUsaaDhw.woff2") format("woff2");
-  font-weight: 400;
-  font-display: swap;
-}
-
 * {
   border-color: var(--color-border);
 }
