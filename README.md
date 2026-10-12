@@ -17,7 +17,7 @@ I could have perhaps taken all this, thrown on a subscribtion model, charged peo
 - **Timeline-based lyric editor** with full drag and drop support
 - **Multi-singer support** with customizable colors per singer
 - **Automatic vocal separation** using Demucs AI (locally driven, not service-based) - remove vocals from any song
-- **CDG+MP3 export** - standard karaoke format compatible with all karaoke players (it looks like garbage but it works for now)
+- **CDG+MP3 export** - standard karaoke format compatible with all karaoke players, with anti-aliased text and a smooth highlight wipe
 - **MP4 video export** - high-quality video files with animated lyrics
 - **Title and end cards** with customizable text and timing
 - **Pre/post buffer controls** for lead-in and fade-out timing to add time for title and end cards
@@ -216,6 +216,13 @@ CDG (CD+Graphics) is the standard format for karaoke files. This application gen
 - `.mp3` file containing the audio track
 
 These files can be played in any standard karaoke software or hardware player. The files are bundled as a ZIP archive for easy download.
+
+The CDG output mirrors the preview: the same line layout, singer colors, title/end cards and instrumental progress bar. A few details of how it fits into the format's limits (300x216 pixels, 16 colors, 300 instructions per second):
+- Text is rendered with a real font (Arial, or Liberation Sans as a metric-compatible fallback) and anti-aliased using shade ramps in the palette.
+- Highlighting uses XOR tile updates, the technique professional karaoke discs use, so the wipe is pixel-smooth and cheap.
+- Updates are scheduled by deadline (lines about to be sung are drawn first) so nothing drifts out of sync with the audio.
+- One singer gets 8 shades of anti-aliasing, two singers get 4 each, and three or four singers use solid colors. Beyond four distinct color pairs, extra singers reuse the closest-looking colors.
+- Lines with a line number beyond the song's line count are not shown, same as in the preview.
 
 ## Troubleshooting
 
